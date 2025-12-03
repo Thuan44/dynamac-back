@@ -8,6 +8,33 @@ from models.task import TaskCreate, TaskResponse
 logger = logging.getLogger(__name__)
 
 
+def parse_datetime(value):
+    """
+    Parse datetime from various formats returned by Supabase.
+    
+    Args:
+        value: Can be a string (ISO format), int (Unix timestamp), or datetime object
+        
+    Returns:
+        datetime object
+    """
+    if isinstance(value, datetime):
+        return value
+    elif isinstance(value, int):
+        # Unix timestamp in seconds
+        return datetime.fromtimestamp(value)
+    elif isinstance(value, str):
+        # ISO format string
+        if value.endswith("Z"):
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        # Handle date-only strings (YYYY-MM-DD)
+        if len(value) == 10 and value.count("-") == 2:
+            return datetime.fromisoformat(value)
+        return datetime.fromisoformat(value)
+    else:
+        raise ValueError(f"Unable to parse datetime from type: {type(value)}")
+
+
 class DatabaseService:
     """Service for handling Supabase Postgres database operations."""
     
@@ -46,14 +73,15 @@ class DatabaseService:
                 raise Exception("Failed to create task: no data returned")
             
             task_dict = response.data[0]
+            
             task = TaskResponse(
-                id=UUID(task_dict["id"]),
+                id=UUID(task_dict["id"]) if isinstance(task_dict["id"], str) else UUID(int=task_dict["id"]),
                 url_source=task_dict["url_source"],
                 state=task_dict["state"],
-                expiration_date=datetime.fromisoformat(task_dict["expiration_date"].replace("Z", "+00:00")),
-                created_at=datetime.fromisoformat(task_dict["created_at"].replace("Z", "+00:00"))
+                expiration_date=parse_datetime(task_dict["expiration_date"]),
+                created_at=parse_datetime(task_dict["created_at"])
             )
-            
+
             logger.info(f"Task created successfully: {task.id}")
             return task
             
