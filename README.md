@@ -1,93 +1,253 @@
-# dynamac-back
+# Dynamac Backend
 
+Backend API Python pour une application de génération de fonds d'écran dynamiques macOS.
 
+## 🚀 Stack Technique
 
-## Getting started
+- **FastAPI** - Framework web moderne et performant pour l'API REST
+- **Supabase** - Base de données PostgreSQL et stockage d'objets via `supabase-py`
+- **Python 3.11+** - Langage de programmation
+- **Pydantic** - Validation de données et gestion des modèles
+- **Uvicorn** - Serveur ASGI pour FastAPI
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-* [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## 📁 Structure du Projet
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/dynamac/dynamac-back.git
-git branch -M main
-git push -uf origin main
+project/
+├── main.py                 # Point d'entrée FastAPI
+├── config.py               # Variables d'environnement (Supabase URL, keys)
+├── requirements.txt        # Dépendances Python
+├── .env.example            # Template pour les variables d'environnement
+├── .gitignore              # Fichiers ignorés par Git
+├── models/
+│   └── task.py            # Modèle Pydantic pour Task
+├── services/
+│   ├── storage.py         # Logique Supabase Storage
+│   └── database.py        # Logique Postgres
+└── routes/
+    └── upload.py          # Route /upload
 ```
 
-## Integrate with your tools
+## 📋 Prérequis
 
-* [Set up project integrations](https://gitlab.com/dynamac/dynamac-back/-/settings/integrations)
+- Python 3.11 ou supérieur
+- Compte Supabase avec:
+  - Un projet configuré
+  - Un bucket Storage nommé `images`
+  - Une table `tasks` dans PostgreSQL avec la structure suivante:
 
-## Collaborate with your team
+```sql
+CREATE TABLE tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    url_source TEXT NOT NULL,
+    state VARCHAR DEFAULT 'uploaded',
+    expiration_date TIMESTAMP DEFAULT (NOW() + INTERVAL '24 hours'),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+```
 
-* [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+## 🔧 Installation
 
-## Test and Deploy
+1. **Cloner le repository**
 
-Use the built-in continuous integration in GitLab.
+```bash
+git clone https://gitlab.com/dynamac/dynamac-back.git
+cd dynamac-back
+```
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+2. **Créer un environnement virtuel**
 
-***
+```bash
+python3 -m venv venv
+source venv/bin/activate  # Sur macOS/Linux
+# ou
+venv\Scripts\activate  # Sur Windows
+```
 
-# Editing this README
+3. **Installer les dépendances**
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+```bash
+pip install -r requirements.txt
+```
 
-## Suggestions for a good README
+4. **Configurer les variables d'environnement**
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+Copiez le fichier `.env.example` vers `.env` et remplissez les valeurs:
 
-## Name
-Choose a self-explaining name for your project.
+```bash
+cp .env.example .env
+```
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+Éditez `.env` avec vos credentials Supabase:
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+```env
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=your_service_key_here
+```
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+## 🚀 Démarrage
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+Lancer le serveur de développement:
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+```bash
+uvicorn main:app --reload
+```
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+Le serveur sera accessible sur `http://localhost:8000`
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+- **API Documentation**: `http://localhost:8000/docs` (Swagger UI)
+- **Alternative Docs**: `http://localhost:8000/redoc` (ReDoc)
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+## 📡 Endpoints
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+### POST `/api/upload`
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+Upload une image et crée une tâche associée.
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+**Request:**
 
-## License
-For open source projects, say how it is licensed.
+- Method: `POST`
+- Content-Type: `multipart/form-data`
+- Body: fichier image (max 20MB)
+- Types acceptés: `image/jpeg`, `image/jpg`, `image/png`, `image/webp`
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+**Response (201 Created):**
+
+```json
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "url_source": "https://your-project.supabase.co/storage/v1/object/public/images/uuid.jpg"
+}
+```
+
+**Erreurs possibles:**
+
+- `400 Bad Request`: Type de fichier invalide ou taille dépassée
+- `500 Internal Server Error`: Erreur lors de l'upload ou de la création de la tâche
+
+**Exemple avec curl:**
+
+```bash
+curl -X POST "http://localhost:8000/api/upload" \
+  -H "accept: application/json" \
+  -H "Content-Type: multipart/form-data" \
+  -F "file=@/path/to/your/image.jpg"
+```
+
+### GET `/`
+
+Endpoint racine retournant des informations sur l'API.
+
+**Response:**
+
+```json
+{
+  "message": "Dynamac Backend API",
+  "version": "1.0.0"
+}
+```
+
+### GET `/health`
+
+Health check endpoint.
+
+**Response:**
+
+```json
+{
+  "status": "healthy"
+}
+```
+
+## 🔒 Gestion des Erreurs
+
+L'endpoint `/api/upload` implémente un mécanisme de rollback automatique:
+
+1. Si l'upload vers Supabase Storage réussit mais la création de la tâche échoue, le fichier est automatiquement supprimé du Storage.
+2. Si la création de la tâche réussit mais qu'une erreur survient ensuite, la tâche et le fichier sont supprimés.
+
+## 🗄️ Configuration Supabase
+
+### Créer le bucket Storage
+
+1. Allez dans votre projet Supabase
+2. Naviguez vers **Storage** > **Buckets**
+3. Créez un nouveau bucket nommé `images`
+4. Configurez les permissions appropriées (public read si nécessaire)
+
+### Créer la table tasks
+
+Exécutez cette requête SQL dans l'éditeur SQL de Supabase:
+
+```sql
+CREATE TABLE IF NOT EXISTS tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    url_source TEXT NOT NULL,
+    state VARCHAR DEFAULT 'uploaded',
+    expiration_date TIMESTAMP DEFAULT (NOW() + INTERVAL '24 hours'),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Optionnel: Créer un index sur expiration_date pour les requêtes de nettoyage
+CREATE INDEX IF NOT EXISTS idx_tasks_expiration_date ON tasks(expiration_date);
+```
+
+## 🧪 Tests
+
+Pour tester l'endpoint avec un fichier local:
+
+```bash
+curl -X POST "http://localhost:8000/api/upload" \
+  -F "file=@test_image.jpg"
+```
+
+## 📝 Variables d'Environnement
+
+| Variable               | Description                                | Requis |
+| ---------------------- | ------------------------------------------ | ------ |
+| `SUPABASE_URL`         | URL de votre projet Supabase               | Oui    |
+| `SUPABASE_SERVICE_KEY` | Clé de service Supabase (service_role key) | Oui    |
+
+## 🛠️ Développement
+
+### Structure des Services
+
+- **StorageService** (`services/storage.py`): Gère les opérations de stockage Supabase
+
+  - `upload_file()`: Upload un fichier vers Supabase Storage
+  - `delete_file()`: Supprime un fichier du Storage
+
+- **DatabaseService** (`services/database.py`): Gère les opérations de base de données
+  - `create_task()`: Crée une nouvelle tâche dans PostgreSQL
+  - `delete_task()`: Supprime une tâche de la base de données
+
+### Modèles Pydantic
+
+- **TaskCreate**: Modèle pour créer une nouvelle tâche
+- **TaskResponse**: Modèle de réponse pour une tâche
+- **UploadResponse**: Modèle de réponse pour l'endpoint upload
+
+## 📦 Dépendances
+
+Voir `requirements.txt` pour la liste complète des dépendances.
+
+Principales dépendances:
+
+- `fastapi==0.104.1`
+- `uvicorn[standard]==0.24.0`
+- `python-multipart==0.0.6`
+- `supabase==2.0.0`
+- `pydantic==2.5.0`
+- `pydantic-settings==2.1.0`
+
+## 🤝 Contribution
+
+Les contributions sont les bienvenues! N'hésitez pas à ouvrir une issue ou une merge request.
+
+## 📄 License
+
+[À définir]
+
+## 👥 Auteurs
+
+Dynamac Team
