@@ -13,7 +13,7 @@ class TaskCreate(BaseModel):
 
 class TaskResponse(BaseModel):
     """Model for task response."""
-    id: UUID
+    id: int
     url_source: str
     state: str
     expiration_date: datetime
@@ -25,6 +25,6 @@ class TaskResponse(BaseModel):
 
 class UploadResponse(BaseModel):
     """Response model for upload endpoint."""
-    task_id: str
+    task_id: int
     url_source: str
 

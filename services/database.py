@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime, timedelta
-from uuid import UUID
 from supabase import create_client, Client
 from config import settings
 from models.task import TaskCreate, TaskResponse
@@ -75,7 +74,7 @@ class DatabaseService:
             task_dict = response.data[0]
             
             task = TaskResponse(
-                id=UUID(task_dict["id"]) if isinstance(task_dict["id"], str) else UUID(int=task_dict["id"]),
+                id=int(task_dict["id"]),
                 url_source=task_dict["url_source"],
                 state=task_dict["state"],
                 expiration_date=parse_datetime(task_dict["expiration_date"]),
@@ -89,7 +88,7 @@ class DatabaseService:
             logger.error(f"Failed to create task: {str(e)}")
             raise
 
-    def update_task_config(self, task_id: UUID, config_payload: dict) -> None:
+    def update_task_config(self, task_id: int, config_payload: dict) -> None:
         """
         Update task configuration and mark it as configured.
 
@@ -106,7 +105,7 @@ class DatabaseService:
                         "state": "configured",
                     }
                 )
-                .eq("id", str(task_id))
+                .eq("id", task_id)
                 .execute()
             )
 
@@ -118,7 +117,7 @@ class DatabaseService:
             logger.error(f"Failed to update task configuration {task_id}: {str(e)}")
             raise
 
-    def delete_task(self, task_id: UUID) -> None:
+    def delete_task(self, task_id: int) -> None:
         """
         Delete a task from the database.
         
@@ -126,7 +125,7 @@ class DatabaseService:
             task_id: ID of the task to delete
         """
         try:
-            self.client.table("tasks").delete().eq("id", str(task_id)).execute()
+            self.client.table("tasks").delete().eq("id", task_id).execute()
             logger.info(f"Task deleted successfully: {task_id}")
         except Exception as e:
             logger.error(f"Failed to delete task {task_id}: {str(e)}")

@@ -65,8 +65,8 @@ async def upload_image(file: UploadFile = File(...)):
         logger.info(f"Upload successful: task_id={task_id}, file={file_name}")
         
         return UploadResponse(
-            task_id=str(task.id),
-            url_source=public_url
+            task_id=task.id,
+            url_source=public_url,
         )
         
     except HTTPException:

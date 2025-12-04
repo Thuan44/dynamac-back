@@ -38,7 +38,7 @@ project/
 
 ```sql
 CREATE TABLE tasks (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id BIGSERIAL PRIMARY KEY,
     url_source TEXT NOT NULL,
     state VARCHAR DEFAULT 'uploaded',
     expiration_date TIMESTAMP DEFAULT (NOW() + INTERVAL '24 hours'),
@@ -193,7 +193,7 @@ Exécutez cette requête SQL dans l'éditeur SQL de Supabase:
 
 ```sql
 CREATE TABLE IF NOT EXISTS tasks (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id BIGSERIAL PRIMARY KEY,
     url_source TEXT NOT NULL,
     state VARCHAR DEFAULT 'uploaded',
     expiration_date TIMESTAMP DEFAULT (NOW() + INTERVAL '24 hours'),

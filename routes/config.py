@@ -1,7 +1,6 @@
 import logging
 from datetime import datetime
 from typing import List, Literal
-from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
@@ -51,7 +50,7 @@ router = APIRouter(prefix="/api", tags=["config"])
     "/task/{task_id}/config",
     status_code=status.HTTP_200_OK,
 )
-async def configure_task(task_id: UUID, payload: TaskConfigPayload):
+async def configure_task(task_id: int, payload: TaskConfigPayload):
     """
     Configure a task with a list of variants.
 
