@@ -98,6 +98,18 @@ Le serveur sera accessible sur `http://localhost:8000`
 - **API Documentation**: `http://localhost:8000/docs` (Swagger UI)
 - **Alternative Docs**: `http://localhost:8000/redoc` (ReDoc)
 
+### Exposer l'API en HTTPS (Développement)
+
+Pour exposer l'API en HTTPS et éviter les problèmes CORS en phase de développement, utilisez [localhost.run](https://localhost.run):
+
+```bash
+ssh -R 80:localhost:8000 localhost.run
+```
+
+Cette commande créera un tunnel HTTPS public vers votre serveur local. Vous recevrez une URL HTTPS (ex: `https://xxxxx.localhost.run`) que vous pourrez utiliser pour tester l'API depuis des applications web externes.
+
+**Note**: Gardez le terminal ouvert pendant que vous utilisez le tunnel. Pour arrêter le tunnel, utilisez `Ctrl+C`.
+
 ## 📡 Endpoints
 
 ### POST `/api/upload`
