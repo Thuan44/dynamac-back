@@ -2,6 +2,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes.upload import router as upload_router
+from routes.config import router as config_router
 
 # Configure logging
 logging.basicConfig(
@@ -29,6 +30,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(upload_router)
+app.include_router(config_router)
 
 
 @app.get("/")

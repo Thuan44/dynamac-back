@@ -88,7 +88,36 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"Failed to create task: {str(e)}")
             raise
-    
+
+    def update_task_config(self, task_id: UUID, config_payload: dict) -> None:
+        """
+        Update task configuration and mark it as configured.
+
+        Args:
+            task_id: ID of the task to update
+            config_payload: Arbitrary JSON-serializable payload to store in config column
+        """
+        try:
+            response = (
+                self.client.table("tasks")
+                .update(
+                    {
+                        "config": config_payload,
+                        "state": "configured",
+                    }
+                )
+                .eq("id", str(task_id))
+                .execute()
+            )
+
+            if response.data is None or len(response.data) == 0:
+                raise Exception(f"Task not found for id: {task_id}")
+
+            logger.info(f"Task configuration updated successfully: {task_id}")
+        except Exception as e:
+            logger.error(f"Failed to update task configuration {task_id}: {str(e)}")
+            raise
+
     def delete_task(self, task_id: UUID) -> None:
         """
         Delete a task from the database.
