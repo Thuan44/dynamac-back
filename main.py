@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from routes.upload import router as upload_router
 from routes.config import router as config_router
 from routes.generate import router as generate_router
+from routes.status import router as status_router
 
 # Configure logging
 logging.basicConfig(
@@ -33,6 +34,7 @@ app.add_middleware(
 app.include_router(upload_router)
 app.include_router(config_router)
 app.include_router(generate_router)
+app.include_router(status_router)
 
 
 @app.get("/")

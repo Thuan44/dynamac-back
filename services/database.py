@@ -153,6 +153,83 @@ class DatabaseService:
             logger.error(f"Failed to get task {task_id}: {str(e)}")
             raise
     
+    def get_task_raw(self, task_id: int) -> dict:
+        """
+        Get raw task data by ID from the database, including all fields.
+        
+        Args:
+            task_id: ID of the task to retrieve
+            
+        Returns:
+            Dictionary with all task data including urls_previews
+            
+        Raises:
+            Exception: If task not found or database operation fails
+        """
+        try:
+            response = self.client.table("tasks").select("*").eq("id", task_id).execute()
+            
+            if not response.data or len(response.data) == 0:
+                raise Exception(f"Task not found for id: {task_id}")
+            
+            return response.data[0]
+            
+        except Exception as e:
+            logger.error(f"Failed to get raw task {task_id}: {str(e)}")
+            raise
+    
+    def update_task_state(self, task_id: int, new_state: str) -> None:
+        """
+        Update the state of a task.
+        
+        Args:
+            task_id: ID of the task to update
+            new_state: New state value
+        """
+        try:
+            response = (
+                self.client.table("tasks")
+                .update({"state": new_state})
+                .eq("id", task_id)
+                .execute()
+            )
+            
+            if response.data is None or len(response.data) == 0:
+                raise Exception(f"Task not found for id: {task_id}")
+            
+            logger.info(f"Task state updated successfully: {task_id} -> {new_state}")
+        except Exception as e:
+            logger.error(f"Failed to update task state {task_id}: {str(e)}")
+            raise
+    
+    def update_task_previews(self, task_id: int, previews: list, new_state: str) -> None:
+        """
+        Update task with preview URLs and state.
+        
+        Args:
+            task_id: ID of the task to update
+            previews: List of preview objects with "hour" and "url" keys
+            new_state: New state value (typically "previews_ready")
+        """
+        try:
+            response = (
+                self.client.table("tasks")
+                .update({
+                    "urls_previews": {"variants": previews},
+                    "state": new_state
+                })
+                .eq("id", task_id)
+                .execute()
+            )
+            
+            if response.data is None or len(response.data) == 0:
+                raise Exception(f"Task not found for id: {task_id}")
+            
+            logger.info(f"Task previews updated successfully: {task_id} with {len(previews)} previews")
+        except Exception as e:
+            logger.error(f"Failed to update task previews {task_id}: {str(e)}")
+            raise
+    
     def delete_task(self, task_id: int) -> None:
         """
         Delete a task from the database.

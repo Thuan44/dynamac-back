@@ -3,7 +3,7 @@ import io
 import logging
 import os
 import uuid
-from typing import Literal, Union
+from typing import Literal, Union, Tuple, Optional
 from PIL import Image
 from google import genai
 from google.genai import types
@@ -44,9 +44,9 @@ Absolute respect for the original composition except for the sky if visible and 
 
 Time-based atmosphere guidelines:
 If the time is between 21:00 and 05:00, the atmosphere must be nighttime with dark sky, reduced visibility, and moonlight or artificial lighting.
-If the time is between 05:00 and 09:00, the atmosphere must be sunrise with warm golden tones, soft light, and dawn colors in the sky.
-If the time is between 09:00 and 17:00, the atmosphere must be full daylight with bright sun, strong direct lighting, and clear visibility.
-If the time is between 17:00 and 21:00, the atmosphere must be sunset with warm orange and pink tones, golden hour lighting, and dusk colors in the sky.
+If the time is between 05:00 and 10:00, the atmosphere must be sunrise with warm golden tones, soft light, and dawn colors in the sky.
+If the time is between 10:00 and 16:00, the atmosphere must be full daylight with bright sun, strong direct lighting, and clear visibility.
+If the time is between 16:00 and 21:00, the atmosphere must be sunset with warm orange and pink tones, golden hour lighting, and dusk colors in the sky.
 
 The image is intended as a desktop/mac wallpaper, so it must be visually striking and aesthetically impactful, with amplified light dynamics if needed.
 
@@ -60,7 +60,7 @@ def generate_variant(
     format_type: Literal["thumbnail", "16:9"] = "16:9",
     mode: str = "image-to-image", 
     strength: float = 0.15
-) -> bytes:
+) -> Tuple[bytes, Optional[str]]:
     """
     Generate a variant of an image using Gemini Nano Banana (image-to-image) API.
     
@@ -72,7 +72,7 @@ def generate_variant(
         strength: Control strength for the transformation (default: 0.15, kept for compatibility)
         
     Returns:
-        bytes: PNG image content as bytes in the specified format
+        Tuple[bytes, Optional[str]]: PNG image content as bytes and preview URL (if auto-uploaded, None otherwise)
         
     Raises:
         ValueError: If required environment variables are missing or invalid format
@@ -219,24 +219,25 @@ def generate_variant(
                 image_bytes_result = img_buffer.getvalue()
                 
                 # Automatically save thumbnail to 'previews' bucket
+                preview_url = None
                 if format_type == "thumbnail":
                     try:
                         # Generate unique file name for thumbnail
                         thumbnail_name = f"{uuid.uuid4()}.png"
                         
                         # Upload to 'previews' bucket
-                        public_url = storage_service.upload_to_bucket(
+                        preview_url = storage_service.upload_to_bucket(
                             file_content=image_bytes_result,
                             file_name=thumbnail_name,
                             content_type="image/png",
                             bucket="previews"
                         )
-                        logger.info(f"Thumbnail automatically saved to 'previews' bucket: {public_url}")
+                        logger.info(f"Thumbnail automatically saved to 'previews' bucket: {preview_url}")
                     except Exception as storage_error:
                         # Log error but don't fail the generation
                         logger.warning(f"Failed to save thumbnail to 'previews' bucket: {str(storage_error)}")
                 
-                return image_bytes_result
+                return image_bytes_result, preview_url
         
         raise Exception("No image data found in API response")
         

@@ -219,6 +219,7 @@ curl -X POST "http://localhost:8000/api/upload" \
 | ---------------------- | ------------------------------------------ | ------ |
 | `SUPABASE_URL`         | URL de votre projet Supabase               | Oui    |
 | `SUPABASE_SERVICE_KEY` | Clé de service Supabase (service_role key) | Oui    |
+| `GEMINI_API_KEY`       | Clé de service Gemini                      | Oui    |
 
 ## 🛠️ Développement
 
