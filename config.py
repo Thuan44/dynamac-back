@@ -8,7 +8,9 @@ class Settings(BaseSettings):
     
     supabase_url: str
     supabase_service_key: str
-    
+
+    gemini_api_key: str
+
     # Storage configuration
     storage_bucket: str = "images"
     
