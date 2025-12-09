@@ -2,11 +2,13 @@ import base64
 import io
 import logging
 import os
+import uuid
 from typing import Literal, Union
 from PIL import Image
 from google import genai
 from google.genai import types
 from config import settings
+from services.storage import storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +216,27 @@ def generate_variant(
                 
                 img_buffer = io.BytesIO()
                 image.save(img_buffer, format="PNG")
-                return img_buffer.getvalue()
+                image_bytes_result = img_buffer.getvalue()
+                
+                # Automatically save thumbnail to 'previews' bucket
+                if format_type == "thumbnail":
+                    try:
+                        # Generate unique file name for thumbnail
+                        thumbnail_name = f"{uuid.uuid4()}.png"
+                        
+                        # Upload to 'previews' bucket
+                        public_url = storage_service.upload_to_bucket(
+                            file_content=image_bytes_result,
+                            file_name=thumbnail_name,
+                            content_type="image/png",
+                            bucket="previews"
+                        )
+                        logger.info(f"Thumbnail automatically saved to 'previews' bucket: {public_url}")
+                    except Exception as storage_error:
+                        # Log error but don't fail the generation
+                        logger.warning(f"Failed to save thumbnail to 'previews' bucket: {str(storage_error)}")
+                
+                return image_bytes_result
         
         raise Exception("No image data found in API response")
         

@@ -48,6 +48,40 @@ class StorageService:
             logger.error(f"Failed to upload file {file_name}: {str(e)}")
             raise
     
+    def upload_to_bucket(self, file_content: bytes, file_name: str, content_type: str, bucket: str) -> str:
+        """
+        Upload a file to a specific Supabase Storage bucket.
+        
+        Args:
+            file_content: Binary content of the file
+            file_name: Name of the file
+            content_type: MIME type of the file
+            bucket: Name of the bucket to upload to
+            
+        Returns:
+            Public URL of the uploaded file
+            
+        Raises:
+            Exception: If upload fails
+        """
+        try:
+            # Upload file to storage
+            response = self.client.storage.from_(bucket).upload(
+                path=file_name,
+                file=file_content,
+                file_options={"content-type": content_type}
+            )
+            
+            # Get public URL
+            public_url = self.client.storage.from_(bucket).get_public_url(file_name)
+            
+            logger.info(f"File uploaded successfully to bucket '{bucket}': {file_name}")
+            return public_url
+            
+        except Exception as e:
+            logger.error(f"Failed to upload file {file_name} to bucket '{bucket}': {str(e)}")
+            raise
+    
     def delete_file(self, file_name: str) -> None:
         """
         Delete a file from Supabase Storage.
