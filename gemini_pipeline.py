@@ -1,12 +1,19 @@
 import io
 import logging
 import os
+from typing import Literal, Union
 from PIL import Image
 from google import genai
 from google.genai import types
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+# Format dimensions
+FORMAT_DIMENSIONS = {
+    "thumbnail": (512, 288),  # 16:9 ratio for thumbnails
+    "16:9": (1920, 1080),     # Full HD 16:9 format
+}
 
 # Base prompt for image modification
 PROMPT_BASE = """
@@ -44,29 +51,36 @@ Apply the lighting adjustment based on the provided display time.
 """
 
 
-def generate_variant(source_path: str, hour: str, mode: str = "image-to-image", strength: float = 0.15) -> bytes:
+def generate_variant(
+    source: Union[str, bytes], 
+    hour: str, 
+    format_type: Literal["thumbnail", "16:9"] = "16:9",
+    mode: str = "image-to-image", 
+    strength: float = 0.15
+) -> bytes:
     """
     Generate a variant of an image using Gemini Nano Banana (image-to-image) API.
     
     Args:
-        source_path: Path to the source image file
+        source: Path to the source image file (str) or image bytes (bytes)
         hour: Hour string to insert into the prompt (e.g., "14:30", "matin", etc.)
+        format_type: Output format - "thumbnail" (512x288) or "16:9" (1920x1080)
         mode: Mode of the transformation (default: "image-to-image", kept for compatibility)
         strength: Control strength for the transformation (default: 0.15, kept for compatibility)
         
     Returns:
-        bytes: PNG image content as bytes
+        bytes: PNG image content as bytes in the specified format
         
     Raises:
-        ValueError: If required environment variables are missing
-        FileNotFoundError: If source file doesn't exist
+        ValueError: If required environment variables are missing or invalid format
+        FileNotFoundError: If source file doesn't exist (when source is a path)
         Exception: If API request fails
     """
     if not settings.gemini_api_key:
         raise ValueError("Missing Gemini API key. Set GEMINI_API_KEY environment variable.")
     
-    if not os.path.exists(source_path):
-        raise FileNotFoundError(f"Source file not found: {source_path}")
+    if format_type not in FORMAT_DIMENSIONS:
+        raise ValueError(f"Invalid format_type. Must be one of: {list(FORMAT_DIMENSIONS.keys())}")
     
     # Construct final prompt by inserting hour into the last sentence
     prompt = PROMPT_BASE.rstrip() + f" : {hour}."
@@ -76,7 +90,18 @@ def generate_variant(source_path: str, hour: str, mode: str = "image-to-image", 
         client = genai.Client(api_key=settings.gemini_api_key)
         
         # Load source image
-        source_image = Image.open(source_path)
+        if isinstance(source, str):
+            if not os.path.exists(source):
+                raise FileNotFoundError(f"Source file not found: {source}")
+            source_image = Image.open(source)
+        else:
+            # source is bytes
+            source_image = Image.open(io.BytesIO(source))
+        
+        # Resize image to target format dimensions
+        target_width, target_height = FORMAT_DIMENSIONS[format_type]
+        # Use LANCZOS resampling for high quality
+        source_image = source_image.resize((target_width, target_height), Image.Resampling.LANCZOS)
         
         # Convert PIL Image to bytes for Gemini API
         img_buffer = io.BytesIO()
@@ -111,6 +136,11 @@ def generate_variant(source_path: str, hour: str, mode: str = "image-to-image", 
                 # Get image bytes from inline data
                 # Using as_image() method to convert to PIL Image, then to bytes
                 image = part.as_image()
+                
+                # Ensure output is in the correct format dimensions
+                if image.size != (target_width, target_height):
+                    image = image.resize((target_width, target_height), Image.Resampling.LANCZOS)
+                
                 img_buffer = io.BytesIO()
                 image.save(img_buffer, format="PNG")
                 return img_buffer.getvalue()

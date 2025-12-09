@@ -117,6 +117,41 @@ class DatabaseService:
             logger.error(f"Failed to update task configuration {task_id}: {str(e)}")
             raise
 
+    def get_task(self, task_id: int) -> TaskResponse:
+        """
+        Get a task by ID from the database.
+        
+        Args:
+            task_id: ID of the task to retrieve
+            
+        Returns:
+            TaskResponse with task data
+            
+        Raises:
+            Exception: If task not found or database operation fails
+        """
+        try:
+            response = self.client.table("tasks").select("*").eq("id", task_id).execute()
+            
+            if not response.data or len(response.data) == 0:
+                raise Exception(f"Task not found for id: {task_id}")
+            
+            task_dict = response.data[0]
+            
+            task = TaskResponse(
+                id=int(task_dict["id"]),
+                url_source=task_dict["url_source"],
+                state=task_dict["state"],
+                expiration_date=parse_datetime(task_dict["expiration_date"]),
+                created_at=parse_datetime(task_dict["created_at"])
+            )
+            
+            return task
+            
+        except Exception as e:
+            logger.error(f"Failed to get task {task_id}: {str(e)}")
+            raise
+    
     def delete_task(self, task_id: int) -> None:
         """
         Delete a task from the database.
