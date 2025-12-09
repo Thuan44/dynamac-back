@@ -1,3 +1,4 @@
+import base64
 import io
 import logging
 import os
@@ -129,13 +130,83 @@ def generate_variant(
         )
         
         # Extract image from response
-        for part in response.parts:
-            if part.text is not None:
+        # Response structure: response.candidates[0].content.parts
+        if not response.candidates or len(response.candidates) == 0:
+            raise Exception("No candidates found in API response")
+        
+        candidate = response.candidates[0]
+        if not candidate.content or not candidate.content.parts:
+            raise Exception("No content parts found in API response")
+        
+        for part in candidate.content.parts:
+            if hasattr(part, 'text') and part.text is not None:
                 logger.info(f"Received text response: {part.text}")
-            elif part.inline_data is not None:
+            elif hasattr(part, 'inline_data') and part.inline_data is not None:
                 # Get image bytes from inline data
-                # Using as_image() method to convert to PIL Image, then to bytes
-                image = part.as_image()
+                inline_data = part.inline_data
+                
+                # Log structure for debugging
+                logger.debug(f"inline_data type: {type(inline_data)}, attributes: {[attr for attr in dir(inline_data) if not attr.startswith('_')]}")
+                
+                # Extract image data - handle different possible structures
+                if not hasattr(inline_data, 'data'):
+                    raise Exception(f"inline_data missing 'data' attribute. Type: {type(inline_data)}, Attributes: {dir(inline_data)}")
+                
+                data = inline_data.data
+                mime_type = getattr(inline_data, 'mime_type', None)
+                logger.debug(f"data type: {type(data)}, mime_type: {mime_type}, length: {len(data) if hasattr(data, '__len__') else 'N/A'}")
+                
+                # Try to decode as base64 if it's a string, otherwise use as bytes
+                if isinstance(data, str):
+                    # Decode base64 string to bytes
+                    try:
+                        image_bytes = base64.b64decode(data)
+                        logger.debug(f"Decoded base64 string to {len(image_bytes)} bytes")
+                    except Exception as e:
+                        logger.error(f"Failed to decode base64 data: {str(e)}")
+                        raise Exception(f"Invalid base64 data: {str(e)}")
+                elif isinstance(data, bytes):
+                    # Data is already bytes
+                    image_bytes = data
+                    logger.debug(f"Using data as bytes directly: {len(image_bytes)} bytes")
+                else:
+                    # Try to convert to bytes
+                    try:
+                        image_bytes = bytes(data)
+                        logger.debug(f"Converted data to bytes: {len(image_bytes)} bytes")
+                    except Exception as e:
+                        raise Exception(f"Cannot convert data to bytes: {str(e)}")
+                
+                # Verify we have valid image data
+                if len(image_bytes) == 0:
+                    raise Exception("Image data is empty")
+                
+                # Check if data looks like a valid image (starts with image magic bytes)
+                image_signatures = {
+                    b'\x89PNG': 'PNG',
+                    b'\xff\xd8\xff': 'JPEG',
+                    b'GIF87a': 'GIF',
+                    b'GIF89a': 'GIF',
+                    b'RIFF': 'WEBP',  # WEBP starts with RIFF
+                }
+                detected_format = None
+                for sig, fmt in image_signatures.items():
+                    if image_bytes.startswith(sig):
+                        detected_format = fmt
+                        break
+                
+                logger.debug(f"Detected image format: {detected_format or 'Unknown'}, First 10 bytes: {image_bytes[:10]}")
+                
+                # Convert to PIL Image
+                try:
+                    img_io = io.BytesIO(image_bytes)
+                    img_io.seek(0)  # Reset position to beginning
+                    image = Image.open(img_io)
+                    image.load()  # Load image data into memory
+                    logger.debug(f"Successfully opened image: {image.format}, size: {image.size}")
+                except Exception as e:
+                    logger.error(f"Failed to open image from bytes. Data length: {len(image_bytes)}, First 20 bytes: {image_bytes[:20].hex()}")
+                    raise Exception(f"Cannot identify image format: {str(e)}")
                 
                 # Ensure output is in the correct format dimensions
                 if image.size != (target_width, target_height):

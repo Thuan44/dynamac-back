@@ -143,7 +143,8 @@ class DatabaseService:
                 url_source=task_dict["url_source"],
                 state=task_dict["state"],
                 expiration_date=parse_datetime(task_dict["expiration_date"]),
-                created_at=parse_datetime(task_dict["created_at"])
+                created_at=parse_datetime(task_dict["created_at"]),
+                config=task_dict["config"]
             )
             
             return task
