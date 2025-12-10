@@ -12,6 +12,7 @@ from io import BytesIO
 from PIL import Image
 from pillow_heif import register_heif_opener, HeifFile
 import piexif
+from piexif import helper as piexif_helper
 
 logger = logging.getLogger(__name__)
 
@@ -326,7 +327,7 @@ def create_heic_with_multiple_images(images_with_hours: List[tuple]) -> bytes:
                     "Exif": {
                         piexif.ExifIFD.DateTimeOriginal: datetime_str,
                         piexif.ExifIFD.DateTimeDigitized: datetime_str,
-                        piexif.ExifIFD.UserComment: piexif.helper.UserComment.dump(hour, encoding="utf-8"),
+                        piexif.ExifIFD.UserComment: piexif_helper.UserComment.dump(hour, encoding="unicode"),
                     }
                 }
                 
