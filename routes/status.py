@@ -23,6 +23,7 @@ class TaskStatusResponse(BaseModel):
     taskId: str
     status: str
     urls_previews: Optional[List[PreviewUrl]] = None
+    urls_renders: Optional[List[PreviewUrl]] = None
 
 
 @router.get(
@@ -37,7 +38,8 @@ async def get_task_status(task_id: int):
     Returns:
         - If status is "processing": {"taskId": "123", "status": "processing", "urls_previews": null}
         - If status is "previews_ready": {"taskId": "123", "status": "previews_ready", "urls_previews": [...]}
-        - For other statuses: {"taskId": "123", "status": "...", "urls_previews": null}
+        - If status is "renders_ready": {"taskId": "123", "status": "renders_ready", "urls_renders": [...]}
+        - For other statuses: {"taskId": "123", "status": "...", "urls_previews": null, "urls_renders": null}
     """
     try:
         # Get raw task data to access urls_previews
@@ -45,10 +47,11 @@ async def get_task_status(task_id: int):
         
         task_state = task_data.get("state", "unknown")
         urls_previews_data = task_data.get("urls_previews")
+        urls_renders_data = task_data.get("urls_renders")
         
         # Extract previews if available and status is previews_ready
         previews = None
-        if task_state == "previews_ready" and urls_previews_data:
+        if task_state in {"previews_ready", "renders_ready"} and urls_previews_data:
             # urls_previews is stored as {"variants": [...]}
             variants = urls_previews_data.get("variants", [])
             if variants:
@@ -58,10 +61,21 @@ async def get_task_status(task_id: int):
                     for variant in variants
                 ]
         
+        # Extract renders if available and status is renders_ready
+        renders = None
+        if task_state == "renders_ready" and urls_renders_data:
+            variants = urls_renders_data.get("variants", [])
+            if variants:
+                renders = [
+                    PreviewUrl(heure=variant.get("hour", ""), url=variant.get("url", ""))
+                    for variant in variants
+                ]
+        
         return TaskStatusResponse(
             taskId=str(task_id),
             status=task_state,
-            urls_previews=previews
+            urls_previews=previews,
+            urls_renders=renders
         )
         
     except Exception as e:
