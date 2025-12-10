@@ -227,7 +227,7 @@ async def process_upscale_background(task_id: int) -> None:
     
     Steps:
     - Fetch previews from urls_previews.variants
-    - Download each preview
+    - Download the original source image once
     - Regenerate with format_type="16:9" while keeping the hour metadata
     - Upload to 'upscaled' bucket and store urls_renders
     """
@@ -235,9 +235,14 @@ async def process_upscale_background(task_id: int) -> None:
         task_data = database_service.get_task_raw(task_id)
         urls_previews = task_data.get("urls_previews", {})
         variants = urls_previews.get("variants", [])
+        source_url = task_data.get("url_source")
         
         if not variants:
             logger.error(f"No previews found to upscale for task {task_id}")
+            database_service.update_task_state(task_id, "previews_ready")
+            return
+        if not source_url:
+            logger.error(f"No source URL found to upscale for task {task_id}")
             database_service.update_task_state(task_id, "previews_ready")
             return
         
@@ -245,27 +250,25 @@ async def process_upscale_background(task_id: int) -> None:
         errors = []
         
         async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                source_response = await client.get(source_url)
+                source_response.raise_for_status()
+                source_bytes = source_response.content
+            except httpx.HTTPError as e:
+                logger.error(f"Failed to download source image {source_url}: {str(e)}")
+                database_service.update_task_state(task_id, "previews_ready")
+                return
+            
             for variant in variants:
                 hour = variant.get("hour")
-                preview_url = variant.get("url")
                 
-                if not hour or not preview_url:
-                    errors.append(f"Missing data for variant: {variant}")
-                    continue
-                
-                try:
-                    response = await client.get(preview_url)
-                    response.raise_for_status()
-                    preview_bytes = response.content
-                except httpx.HTTPError as e:
-                    error_msg = f"Failed to download preview {preview_url}: {str(e)}"
-                    logger.error(error_msg)
-                    errors.append(error_msg)
+                if not hour:
+                    errors.append(f"Missing hour for variant: {variant}")
                     continue
                 
                 try:
                     render_bytes, _ = generate_variant(
-                        source=preview_bytes,
+                        source=source_bytes,
                         hour=hour,
                         format_type="16:9"
                     )
