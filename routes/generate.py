@@ -8,8 +8,15 @@ from services.database import database_service
 from services.storage import storage_service
 from gemini_pipeline import generate_variant
 import uuid
+from io import BytesIO
+from PIL import Image
+from pillow_heif import register_heif_opener, HeifFile
+import piexif
 
 logger = logging.getLogger(__name__)
+
+# Register HEIC support in Pillow
+register_heif_opener()
 
 router = APIRouter(prefix="/api", tags=["generate"])
 
@@ -221,6 +228,78 @@ async def generate_image(request: GenerateRequest, background_tasks: BackgroundT
         )
 
 
+def create_heic_with_multiple_images(images_with_hours: List[tuple]) -> bytes:
+    """
+    Create a single HEIC file containing multiple images with their temporal metadata.
+    
+    Args:
+        images_with_hours: List of tuples (image_bytes, hour) where:
+            - image_bytes: PNG image bytes to convert to HEIC
+            - hour: Hour in HH:MM format to embed as temporal metadata (None for original image)
+        
+    Returns:
+        HEIC file bytes containing all images with embedded temporal metadata
+    """
+    try:
+        heif_file = HeifFile()
+        
+        for idx, (image_bytes, hour) in enumerate(images_with_hours):
+            # Open image from bytes
+            image = Image.open(BytesIO(image_bytes))
+            
+            # Convert RGBA to RGB if necessary (HEIC doesn't support alpha channel well)
+            if image.mode == "RGBA":
+                rgb_image = Image.new("RGB", image.size, (255, 255, 255))
+                rgb_image.paste(image, mask=image.split()[3] if len(image.split()) == 4 else None)
+                image = rgb_image
+            elif image.mode != "RGB":
+                image = image.convert("RGB")
+            
+            # Add EXIF metadata if hour is provided
+            if hour:
+                # Parse hour to create a datetime for metadata
+                hour_parts = hour.split(":")
+                hour_int = int(hour_parts[0])
+                minute_int = int(hour_parts[1])
+                
+                # Create datetime with current date and specified hour
+                now = datetime.now()
+                metadata_datetime = now.replace(hour=hour_int, minute=minute_int, second=0, microsecond=0)
+                datetime_str = metadata_datetime.strftime("%Y:%m:%d %H:%M:%S")
+                
+                # Create EXIF data with temporal metadata using piexif
+                exif_dict = {
+                    "0th": {
+                        piexif.ImageIFD.DateTime: datetime_str,
+                    },
+                    "Exif": {
+                        piexif.ExifIFD.DateTimeOriginal: datetime_str,
+                        piexif.ExifIFD.DateTimeDigitized: datetime_str,
+                        piexif.ExifIFD.UserComment: piexif.helper.UserComment.dump(hour, encoding="utf-8"),
+                    }
+                }
+                
+                # Convert to EXIF bytes and attach to image
+                exif_bytes = piexif.dump(exif_dict)
+                image.info["exif"] = exif_bytes
+            
+            # Add image to HeifFile
+            heif_file.add_from_pillow(image)
+            
+            logger.debug(f"Added image {idx + 1} to HEIC file (hour: {hour or 'original'})")
+        
+        # Save to HEIC format in memory
+        heic_buffer = BytesIO()
+        heif_file.save(heic_buffer, quality=90)
+        heic_buffer.seek(0)
+        
+        return heic_buffer.getvalue()
+        
+    except Exception as e:
+        logger.error(f"Failed to create HEIC with multiple images: {str(e)}")
+        raise
+
+
 async def process_upscale_background(task_id: int) -> None:
     """
     Background task to upscale previews to full-size renders.
@@ -236,6 +315,7 @@ async def process_upscale_background(task_id: int) -> None:
         urls_previews = task_data.get("urls_previews", {})
         variants = urls_previews.get("variants", [])
         source_url = task_data.get("url_source")
+        config = task_data.get("config", {})
         
         if not variants:
             logger.error(f"No previews found to upscale for task {task_id}")
@@ -248,6 +328,7 @@ async def process_upscale_background(task_id: int) -> None:
         
         renders = []
         errors = []
+        images_for_heic = []  # List to collect all images for HEIC file: [(image_bytes, hour), ...]
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
@@ -258,6 +339,9 @@ async def process_upscale_background(task_id: int) -> None:
                 logger.error(f"Failed to download source image {source_url}: {str(e)}")
                 database_service.update_task_state(task_id, "previews_ready")
                 return
+            
+            # Add original image first (without hour metadata)
+            images_for_heic.append((source_bytes, None))
             
             for variant in variants:
                 hour = variant.get("hour")
@@ -286,7 +370,11 @@ async def process_upscale_background(task_id: int) -> None:
                         "url": render_url
                     })
                     
+                    # Add variant image with its hour for HEIC file
+                    images_for_heic.append((render_bytes, hour))
+                    
                     logger.info(f"Successfully upscaled render for hour {hour}")
+                        
                 except Exception as e:
                     error_msg = f"Failed to upscale variant {hour}: {str(e)}"
                     logger.error(error_msg)
@@ -296,6 +384,32 @@ async def process_upscale_background(task_id: int) -> None:
             logger.error(f"All upscales failed for task {task_id}. Errors: {errors}")
             database_service.update_task_state(task_id, "previews_ready")
             return
+        
+        # Create single HEIC file with all images (original + variants) and store in dynamics bucket
+        heic_url = None
+        try:
+            if len(images_for_heic) > 0:
+                heic_bytes = create_heic_with_multiple_images(images_for_heic)
+                heic_name = f"dynamic_{task_id}_{uuid.uuid4().hex[:8]}.heic"
+                heic_url = storage_service.upload_to_bucket(
+                    file_content=heic_bytes,
+                    file_name=heic_name,
+                    content_type="image/heic",
+                    bucket="dynamics"
+                )
+                logger.info(f"Successfully created and uploaded HEIC file with {len(images_for_heic)} images to dynamics bucket")
+                
+                # Update url_finale in database with HEIC file URL
+                try:
+                    database_service.update_task_final_url(task_id, heic_url)
+                    logger.info(f"Task {task_id} final URL updated: {heic_url}")
+                except Exception as url_error:
+                    logger.error(f"Failed to update final URL for task {task_id}: {str(url_error)}")
+            else:
+                logger.warning(f"No images to include in HEIC file for task {task_id}")
+        except Exception as heic_error:
+            logger.error(f"Failed to create HEIC file for task {task_id}: {str(heic_error)}")
+            # Don't fail the whole process if HEIC creation fails
         
         try:
             database_service.update_task_renders(task_id, renders, "renders_ready")

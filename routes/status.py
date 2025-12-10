@@ -24,6 +24,7 @@ class TaskStatusResponse(BaseModel):
     status: str
     urls_previews: Optional[List[PreviewUrl]] = None
     urls_renders: Optional[List[PreviewUrl]] = None
+    url_finale: Optional[str] = None
 
 
 @router.get(
@@ -48,6 +49,7 @@ async def get_task_status(task_id: int):
         task_state = task_data.get("state", "unknown")
         urls_previews_data = task_data.get("urls_previews")
         urls_renders_data = task_data.get("urls_renders")
+        url_finale = task_data.get("url_finale")
         
         # Extract previews if available and status is previews_ready
         previews = None
@@ -75,7 +77,8 @@ async def get_task_status(task_id: int):
             taskId=str(task_id),
             status=task_state,
             urls_previews=previews,
-            urls_renders=renders
+            urls_renders=renders,
+            url_finale=url_finale
         )
         
     except Exception as e:

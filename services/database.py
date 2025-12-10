@@ -258,6 +258,30 @@ class DatabaseService:
             logger.error(f"Failed to update task renders {task_id}: {str(e)}")
             raise
     
+    def update_task_final_url(self, task_id: int, url_finale: str) -> None:
+        """
+        Update task with final HEIC file URL.
+        
+        Args:
+            task_id: ID of the task to update
+            url_finale: URL of the final HEIC file
+        """
+        try:
+            response = (
+                self.client.table("tasks")
+                .update({"url_finale": url_finale})
+                .eq("id", task_id)
+                .execute()
+            )
+            
+            if response.data is None or len(response.data) == 0:
+                raise Exception(f"Task not found for id: {task_id}")
+            
+            logger.info(f"Task final URL updated successfully: {task_id} -> {url_finale}")
+        except Exception as e:
+            logger.error(f"Failed to update task final URL {task_id}: {str(e)}")
+            raise
+    
     def delete_task(self, task_id: int) -> None:
         """
         Delete a task from the database.
