@@ -414,8 +414,16 @@ async def process_upscale_background(task_id: int) -> None:
             original_image.save(original_buffer, format="PNG")
             original_resized_bytes = original_buffer.getvalue()
             
-            # Add original image first (without hour metadata)
-            images_for_heic.append((original_resized_bytes, None))
+            # Check if any variant uses "original" source to avoid duplicate
+            has_original_variant = any(
+                config_by_hour.get(variant.get("hour"), "ai") == "original"
+                for variant in variants
+                if variant.get("hour")
+            )
+            
+            # Add original image first only if no variant uses it (to avoid duplicate)
+            if not has_original_variant:
+                images_for_heic.append((original_resized_bytes, None))
             
             for variant in variants:
                 hour = variant.get("hour")
