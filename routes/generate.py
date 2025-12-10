@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 import httpx
 from services.database import database_service
 from services.storage import storage_service
-from gemini_pipeline import generate_variant
+from gemini_pipeline import generate_variant, upscale_image
 import uuid
 from io import BytesIO
 from PIL import Image
@@ -358,8 +358,8 @@ async def process_upscale_background(task_id: int) -> None:
     
     Steps:
     - Fetch previews from urls_previews.variants
-    - Download the original source image once
-    - Regenerate with format_type="16:9" while keeping the hour metadata
+    - Download the original source image once (for original variants)
+    - For AI variants: download thumbnail and upscale it to 16:9 format
     - Upload to 'upscaled' bucket and store urls_renders
     """
     try:
@@ -457,10 +457,26 @@ async def process_upscale_background(task_id: int) -> None:
                         
                         logger.info(f"Using original resized image for variant hour {hour}")
                     else:
-                        # Generate variant using Gemini for "ai" source
-                        render_bytes, _ = generate_variant(
-                            source=source_bytes,
-                            hour=hour,
+                        # Upscale thumbnail using Gemini for "ai" source
+                        preview_url = variant.get("url")
+                        if not preview_url:
+                            errors.append(f"Missing preview URL for variant hour {hour}")
+                            continue
+                        
+                        # Download thumbnail
+                        try:
+                            preview_response = await client.get(preview_url)
+                            preview_response.raise_for_status()
+                            thumbnail_bytes = preview_response.content
+                        except httpx.HTTPError as e:
+                            error_msg = f"Failed to download thumbnail from {preview_url} for hour {hour}: {str(e)}"
+                            logger.error(error_msg)
+                            errors.append(error_msg)
+                            continue
+                        
+                        # Upscale thumbnail to 16:9 format
+                        render_bytes = upscale_image(
+                            source=thumbnail_bytes,
                             format_type="16:9"
                         )
                         
@@ -480,7 +496,7 @@ async def process_upscale_background(task_id: int) -> None:
                         # Add variant image with its hour for HEIC file
                         images_for_heic.append((render_bytes, hour))
                         
-                        logger.info(f"Successfully upscaled render for hour {hour}")
+                        logger.info(f"Successfully upscaled thumbnail to render for hour {hour}")
                         
                 except Exception as e:
                     error_msg = f"Failed to upscale variant {hour}: {str(e)}"

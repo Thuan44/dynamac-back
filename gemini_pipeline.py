@@ -53,6 +53,19 @@ The image is intended as a desktop/mac wallpaper, so it must be visually strikin
 Apply the lighting adjustment based on the provided display time.
 """
 
+# Prompt for image upscaling (strict fidelity)
+PROMPT_UPSCALE = """
+Upscale only.
+
+Do not alter any shape, color, texture, pattern, edge, shadow, highlight, or micro-detail.
+
+No additions, removals, smoothing, corrections, or reinterpretation of any kind.
+
+Reproduce the input image with strict one-to-one fidelity, identical geometry, identical structure, identical visual content.
+
+Output must be a higher-resolution version of the original and nothing else.
+"""
+
 
 def generate_variant(
     source: Union[str, bytes], 
@@ -243,5 +256,137 @@ def generate_variant(
         
     except Exception as e:
         logger.error(f"Failed to generate variant with Gemini: {str(e)}")
+        raise Exception(f"Gemini API error: {str(e)}")
+
+
+def upscale_image(
+    source: Union[str, bytes],
+    format_type: Literal["thumbnail", "16:9"] = "16:9"
+) -> bytes:
+    """
+    Upscale an image using Gemini API with strict fidelity preservation.
+    
+    Args:
+        source: Path to the source image file (str) or image bytes (bytes)
+        format_type: Output format - "thumbnail" (512x288) or "16:9" (1920x1080)
+        
+    Returns:
+        bytes: PNG image content as bytes
+        
+    Raises:
+        ValueError: If required environment variables are missing or invalid format
+        FileNotFoundError: If source file doesn't exist (when source is a path)
+        Exception: If API request fails
+    """
+    if not settings.gemini_api_key:
+        raise ValueError("Missing Gemini API key. Set GEMINI_API_KEY environment variable.")
+    
+    if format_type not in FORMAT_DIMENSIONS:
+        raise ValueError(f"Invalid format_type. Must be one of: {list(FORMAT_DIMENSIONS.keys())}")
+    
+    try:
+        # Initialize Gemini client
+        client = genai.Client(api_key=settings.gemini_api_key)
+        
+        # Load source image
+        if isinstance(source, str):
+            if not os.path.exists(source):
+                raise FileNotFoundError(f"Source file not found: {source}")
+            source_image = Image.open(source)
+        else:
+            # source is bytes
+            source_image = Image.open(io.BytesIO(source))
+        
+        # Get target dimensions
+        target_width, target_height = FORMAT_DIMENSIONS[format_type]
+        
+        # Convert PIL Image to bytes for Gemini API
+        img_buffer = io.BytesIO()
+        source_image.save(img_buffer, format="PNG")
+        img_bytes = img_buffer.getvalue()
+        
+        # Prepare image part for Gemini API
+        image_part = types.Part.from_bytes(
+            data=img_bytes,
+            mime_type="image/png"
+        )
+        
+        # Generate content with Gemini using upscale prompt
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-image",
+            contents=[
+                image_part,
+                PROMPT_UPSCALE
+            ],
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"]
+            )
+        )
+        
+        # Extract image from response
+        if not response.candidates or len(response.candidates) == 0:
+            raise Exception("No candidates found in API response")
+        
+        candidate = response.candidates[0]
+        if not candidate.content or not candidate.content.parts:
+            raise Exception("No content parts found in API response")
+        
+        for part in candidate.content.parts:
+            if hasattr(part, 'text') and part.text is not None:
+                logger.info(f"Received text response: {part.text}")
+            elif hasattr(part, 'inline_data') and part.inline_data is not None:
+                # Get image bytes from inline data
+                inline_data = part.inline_data
+                
+                # Extract image data
+                if not hasattr(inline_data, 'data'):
+                    raise Exception(f"inline_data missing 'data' attribute. Type: {type(inline_data)}")
+                
+                data = inline_data.data
+                
+                # Try to decode as base64 if it's a string, otherwise use as bytes
+                if isinstance(data, str):
+                    try:
+                        image_bytes = base64.b64decode(data)
+                    except Exception as e:
+                        logger.error(f"Failed to decode base64 data: {str(e)}")
+                        raise Exception(f"Invalid base64 data: {str(e)}")
+                elif isinstance(data, bytes):
+                    image_bytes = data
+                else:
+                    try:
+                        image_bytes = bytes(data)
+                    except Exception as e:
+                        raise Exception(f"Cannot convert data to bytes: {str(e)}")
+                
+                # Verify we have valid image data
+                if len(image_bytes) == 0:
+                    raise Exception("Image data is empty")
+                
+                # Convert to PIL Image
+                try:
+                    img_io = io.BytesIO(image_bytes)
+                    img_io.seek(0)
+                    image = Image.open(img_io)
+                    image.load()
+                    logger.debug(f"Successfully opened upscaled image: {image.format}, size: {image.size}")
+                except Exception as e:
+                    logger.error(f"Failed to open image from bytes. Data length: {len(image_bytes)}")
+                    raise Exception(f"Cannot identify image format: {str(e)}")
+                
+                # Ensure output is in the correct format dimensions
+                if image.size != (target_width, target_height):
+                    image = image.resize((target_width, target_height), Image.Resampling.LANCZOS)
+                
+                img_buffer = io.BytesIO()
+                image.save(img_buffer, format="PNG")
+                image_bytes_result = img_buffer.getvalue()
+                
+                return image_bytes_result
+        
+        raise Exception("No image data found in API response")
+        
+    except Exception as e:
+        logger.error(f"Failed to upscale image with Gemini: {str(e)}")
         raise Exception(f"Gemini API error: {str(e)}")
 
