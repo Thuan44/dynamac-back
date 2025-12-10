@@ -229,6 +229,34 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"Failed to update task previews {task_id}: {str(e)}")
             raise
+
+    def update_task_renders(self, task_id: int, renders: list, new_state: str) -> None:
+        """
+        Update task with upscaled render URLs and state.
+        
+        Args:
+            task_id: ID of the task to update
+            renders: List of render objects with "hour" and "url" keys
+            new_state: New state value (typically "renders_ready")
+        """
+        try:
+            response = (
+                self.client.table("tasks")
+                .update({
+                    "urls_renders": {"variants": renders},
+                    "state": new_state
+                })
+                .eq("id", task_id)
+                .execute()
+            )
+            
+            if response.data is None or len(response.data) == 0:
+                raise Exception(f"Task not found for id: {task_id}")
+            
+            logger.info(f"Task renders updated successfully: {task_id} with {len(renders)} renders")
+        except Exception as e:
+            logger.error(f"Failed to update task renders {task_id}: {str(e)}")
+            raise
     
     def delete_task(self, task_id: int) -> None:
         """

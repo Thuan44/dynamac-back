@@ -220,3 +220,144 @@ async def generate_image(request: GenerateRequest, background_tasks: BackgroundT
             detail=f"Internal server error: {str(e)}"
         )
 
+
+async def process_upscale_background(task_id: int) -> None:
+    """
+    Background task to upscale previews to full-size renders.
+    
+    Steps:
+    - Fetch previews from urls_previews.variants
+    - Download each preview
+    - Regenerate with format_type="16:9" while keeping the hour metadata
+    - Upload to 'upscaled' bucket and store urls_renders
+    """
+    try:
+        task_data = database_service.get_task_raw(task_id)
+        urls_previews = task_data.get("urls_previews", {})
+        variants = urls_previews.get("variants", [])
+        
+        if not variants:
+            logger.error(f"No previews found to upscale for task {task_id}")
+            database_service.update_task_state(task_id, "previews_ready")
+            return
+        
+        renders = []
+        errors = []
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for variant in variants:
+                hour = variant.get("hour")
+                preview_url = variant.get("url")
+                
+                if not hour or not preview_url:
+                    errors.append(f"Missing data for variant: {variant}")
+                    continue
+                
+                try:
+                    response = await client.get(preview_url)
+                    response.raise_for_status()
+                    preview_bytes = response.content
+                except httpx.HTTPError as e:
+                    error_msg = f"Failed to download preview {preview_url}: {str(e)}"
+                    logger.error(error_msg)
+                    errors.append(error_msg)
+                    continue
+                
+                try:
+                    render_bytes, _ = generate_variant(
+                        source=preview_bytes,
+                        hour=hour,
+                        format_type="16:9"
+                    )
+                    
+                    render_name = f"render_{hour.replace(':', '')}_{uuid.uuid4().hex[:8]}.png"
+                    render_url = storage_service.upload_to_bucket(
+                        file_content=render_bytes,
+                        file_name=render_name,
+                        content_type="image/png",
+                        bucket="upscaled"
+                    )
+                    
+                    renders.append({
+                        "hour": hour,
+                        "url": render_url
+                    })
+                    
+                    logger.info(f"Successfully upscaled render for hour {hour}")
+                except Exception as e:
+                    error_msg = f"Failed to upscale variant {hour}: {str(e)}"
+                    logger.error(error_msg)
+                    errors.append(error_msg)
+        
+        if len(renders) == 0:
+            logger.error(f"All upscales failed for task {task_id}. Errors: {errors}")
+            database_service.update_task_state(task_id, "previews_ready")
+            return
+        
+        try:
+            database_service.update_task_renders(task_id, renders, "renders_ready")
+            logger.info(f"Task {task_id} updated with {len(renders)} renders")
+        except Exception as e:
+            logger.error(f"Failed to update task with renders: {str(e)}")
+            try:
+                database_service.update_task_state(task_id, "previews_ready")
+            except:
+                pass
+    except Exception as e:
+        logger.error(f"Unexpected error in background upscale for task {task_id}: {str(e)}")
+        try:
+            database_service.update_task_state(task_id, "previews_ready")
+        except:
+            pass
+
+
+@router.post("/task/{task_id}/upscale")
+async def upscale_task(task_id: int, background_tasks: BackgroundTasks):
+    """
+    Upscale generated previews to full-size renders (16:9) while keeping hours.
+    
+    Preconditions:
+    - Task must exist
+    - Task state must be "previews_ready"
+    - urls_previews.variants must contain hour/url entries
+    """
+    try:
+        task = database_service.get_task_raw(task_id)
+        if task.get("state") != "previews_ready":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Task is not ready for upscale. State must be 'previews_ready'."
+            )
+        
+        urls_previews = task.get("urls_previews", {})
+        variants = urls_previews.get("variants", [])
+        if not variants:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No previews available to upscale."
+            )
+        
+        try:
+            database_service.update_task_state(task_id, "upscaling")
+        except Exception as e:
+            logger.error(f"Failed to update task state to upscaling: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to update task state: {str(e)}"
+            )
+        
+        background_tasks.add_task(process_upscale_background, task_id=task_id)
+        
+        return {
+            "task_id": str(task_id),
+            "status": "upscaling"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in upscale endpoint: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}"
+        )
+
