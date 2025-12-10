@@ -62,6 +62,14 @@ async def process_generation_background(
         source_image_url: URL of the source image
     """
     try:
+        # Get task configuration to check which variants are "original" vs "ai"
+        task_data = database_service.get_task_raw(task_id)
+        config = task_data.get("config", {})
+        config_variants = config.get("variants", [])
+        
+        # Create a mapping of hour -> source type from config
+        config_by_hour = {v.get("hour"): v.get("source", "ai") for v in config_variants}
+        
         # Download source image from URL
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
@@ -83,36 +91,79 @@ async def process_generation_background(
         
         for variant in variants:
             try:
-                # Generate variant using Gemini
-                generated_image_bytes, auto_uploaded_url = generate_variant(
-                    source=image_bytes,
-                    hour=variant.hour,
-                    format_type=variant.format
-                )
+                variant_source = config_by_hour.get(variant.hour, "ai")
                 
-                # Use auto-uploaded URL if available (for thumbnails), otherwise upload manually
-                if auto_uploaded_url:
-                    preview_url = auto_uploaded_url
-                else:
-                    # Generate unique file name for preview
-                    # Format: preview_{hour_without_colon}.png (e.g., preview_0800.png)
-                    hour_filename = variant.hour.replace(":", "")
-                    preview_name = f"preview_{hour_filename}_{uuid.uuid4().hex[:8]}.png"
+                # If source is "original", use the original image URL or create thumbnail
+                if variant_source == "original":
+                    if variant.format == "thumbnail":
+                        # Create thumbnail from original image
+                        image = Image.open(BytesIO(image_bytes))
+                        # Convert to RGB if necessary
+                        if image.mode == "RGBA":
+                            rgb_image = Image.new("RGB", image.size, (255, 255, 255))
+                            rgb_image.paste(image, mask=image.split()[3] if len(image.split()) == 4 else None)
+                            image = rgb_image
+                        elif image.mode != "RGB":
+                            image = image.convert("RGB")
+                        
+                        # Resize to thumbnail dimensions (512x288)
+                        image = image.resize((512, 288), Image.Resampling.LANCZOS)
+                        
+                        # Convert to bytes
+                        img_buffer = BytesIO()
+                        image.save(img_buffer, format="PNG")
+                        thumbnail_bytes = img_buffer.getvalue()
+                        
+                        # Upload thumbnail
+                        hour_filename = variant.hour.replace(":", "")
+                        preview_name = f"preview_{hour_filename}_{uuid.uuid4().hex[:8]}.png"
+                        preview_url = storage_service.upload_to_bucket(
+                            file_content=thumbnail_bytes,
+                            file_name=preview_name,
+                            content_type="image/png",
+                            bucket="previews"
+                        )
+                    else:
+                        # For 16:9 format, use original source URL directly
+                        preview_url = source_image_url
                     
-                    # Upload to 'previews' bucket
-                    preview_url = storage_service.upload_to_bucket(
-                        file_content=generated_image_bytes,
-                        file_name=preview_name,
-                        content_type="image/png",
-                        bucket="previews"
+                    preview_urls.append({
+                        "hour": variant.hour,
+                        "url": preview_url
+                    })
+                    
+                    logger.info(f"Using original image for variant hour {variant.hour}")
+                else:
+                    # Generate variant using Gemini for "ai" source
+                    generated_image_bytes, auto_uploaded_url = generate_variant(
+                        source=image_bytes,
+                        hour=variant.hour,
+                        format_type=variant.format
                     )
-                
-                preview_urls.append({
-                    "hour": variant.hour,
-                    "url": preview_url
-                })
-                
-                logger.info(f"Successfully generated and uploaded variant for hour {variant.hour}")
+                    
+                    # Use auto-uploaded URL if available (for thumbnails), otherwise upload manually
+                    if auto_uploaded_url:
+                        preview_url = auto_uploaded_url
+                    else:
+                        # Generate unique file name for preview
+                        # Format: preview_{hour_without_colon}.png (e.g., preview_0800.png)
+                        hour_filename = variant.hour.replace(":", "")
+                        preview_name = f"preview_{hour_filename}_{uuid.uuid4().hex[:8]}.png"
+                        
+                        # Upload to 'previews' bucket
+                        preview_url = storage_service.upload_to_bucket(
+                            file_content=generated_image_bytes,
+                            file_name=preview_name,
+                            content_type="image/png",
+                            bucket="previews"
+                        )
+                    
+                    preview_urls.append({
+                        "hour": variant.hour,
+                        "url": preview_url
+                    })
+                    
+                    logger.info(f"Successfully generated and uploaded variant for hour {variant.hour}")
                 
             except ValueError as e:
                 error_msg = f"Validation error for variant {variant.hour}: {str(e)}"
