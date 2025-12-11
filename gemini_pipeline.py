@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Format dimensions
 FORMAT_DIMENSIONS = {
     "thumbnail": (512, 288),  # 16:9 ratio for thumbnails
-    "16:9": (1920, 1080),     # Full HD 16:9 format
+    "16:9": (2560, 1440),     # Full HD 16:9 format
 }
 
 # Base prompt for image modification
@@ -43,10 +43,14 @@ No alteration of sharpness or depth.
 Absolute respect for the original composition except for the sky if visible and any clouds.
 
 Time-based atmosphere guidelines:
-If the time is between 21:00 and 05:00, the atmosphere must be nighttime with dark sky, reduced visibility, and moonlight or artificial lighting.
-If the time is between 05:00 and 10:00, the atmosphere must be sunrise with warm golden tones, soft light, and dawn colors in the sky.
-If the time is between 10:00 and 16:00, the atmosphere must be full daylight with bright sun, strong direct lighting, and clear visibility.
-If the time is between 16:00 and 21:00, the atmosphere must be sunset with warm orange and pink tones, golden hour lighting, and dusk colors in the sky.
+If the time is between 21:00 and 05:00, the atmosphere must be nighttime with dark sky, reduced visibility, and moonlight or artificial lighting. Replace the sun by a moon if the sun is present; add the moon if not present.
+If the time is between 05:00 and 10:00, the atmosphere must be sunrise with warm golden tones, soft light, and dawn colors in the sky. Replace the moon with the sun if present. The sun absolutly needs to come from the left side of the image. If it is already present, reposition it to match the time.
+If the time is between 10:00 and 16:00, the atmosphere must be full daylight with bright sun, strong direct lighting, and clear visibility. Remove or reposition the sun if present to match the time.
+If the time is between 16:00 and 21:00, the atmosphere must be sunset with warm orange and pink tones, a bit darker than golden hour, with dusk colors in the sky. The sun must be visible from the right side of the image. If it is already present, reposition it to match the time.
+
+Lighting adjustments must handle shadows and areas that should remain unlit according to the main light source (sun or moon) with ultra-precise accuracy.
+
+The style of any additions (moon, sun, stars, clouds) must seamlessly match the overall style of the image.
 
 The image is intended as a desktop/mac wallpaper, so it must be visually striking and aesthetically impactful, with amplified light dynamics if needed.
 
@@ -55,15 +59,29 @@ Apply the lighting adjustment based on the provided display time.
 
 # Prompt for image upscaling (strict fidelity)
 PROMPT_UPSCALE = """
-Upscale only.
+Upscale the input image to ultra-high resolution (2K or higher) with absolute fidelity.
 
-Do not alter any shape, color, texture, pattern, edge, shadow, highlight, or micro-detail.
+Do not modify, alter, or reinterpret any element of the image:
 
-No additions, removals, smoothing, corrections, or reinterpretation of any kind.
+Preserve all shapes, geometry, structure, and proportions exactly.
 
-Reproduce the input image with strict one-to-one fidelity, identical geometry, identical structure, identical visual content.
+Preserve all colors, local tones, gradients, and saturation values exactly.
 
-Output must be a higher-resolution version of the original and nothing else.
+Preserve all textures, micro-details, edges, patterns, highlights, and shadows exactly.
+
+Preserve all visual content without any distortion, smoothing, correction, or enhancement.
+
+No additions, no removals, no stylization, no anti-aliasing alterations.
+
+Maintain the original sharpness, contrast, depth, and perspective without any modification.
+
+The output must be a higher-resolution version of the original image, with every pixel detail replicated accurately at 2K or higher.
+
+Ensure absolute one-to-one visual fidelity: every element, from fine textures to subtle shadows, must match the input exactly.
+
+Do not change the composition.
+
+The result must be an identical image at higher resolution, suitable for high-definition displays, without any loss of detail or quality.
 """
 
 
@@ -80,7 +98,7 @@ def generate_variant(
     Args:
         source: Path to the source image file (str) or image bytes (bytes)
         hour: Hour string to insert into the prompt (e.g., "14:30", "matin", etc.)
-        format_type: Output format - "thumbnail" (512x288) or "16:9" (1920x1080)
+        format_type: Output format - "thumbnail" (512x288) or "16:9" (2560x1440)
         mode: Mode of the transformation (default: "image-to-image", kept for compatibility)
         strength: Control strength for the transformation (default: 0.15, kept for compatibility)
         
@@ -268,7 +286,7 @@ def upscale_image(
     
     Args:
         source: Path to the source image file (str) or image bytes (bytes)
-        format_type: Output format - "thumbnail" (512x288) or "16:9" (1920x1080)
+        format_type: Output format - "thumbnail" (512x288) or "16:9" (2560x1440)
         
     Returns:
         bytes: PNG image content as bytes

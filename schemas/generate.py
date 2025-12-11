@@ -9,7 +9,7 @@ class VariantRequest(BaseModel):
     hour: str = Field(..., description="Hour in HH:MM format for lighting adjustment")
     format: Literal["thumbnail", "16:9"] = Field(
         default="thumbnail",
-        description="Output format: 'thumbnail' (512x288) or '16:9' (1920x1080)",
+        description="Output format: 'thumbnail' (512x288) or '16:9' (2560x1440)",
     )
 
     @field_validator("hour")

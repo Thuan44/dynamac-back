@@ -65,7 +65,7 @@ async def process_upscale_background(task_id: int) -> None:
             elif original_image.mode != "RGB":
                 original_image = original_image.convert("RGB")
 
-            original_image = original_image.resize((1920, 1080), Image.Resampling.LANCZOS)
+            original_image = original_image.resize((2560, 1440), Image.Resampling.LANCZOS)
 
             original_buffer = BytesIO()
             original_image.save(original_buffer, format="PNG")
