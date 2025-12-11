@@ -14,6 +14,7 @@ import uuid
 from io import BytesIO
 from PIL import Image
 from pillow_heif import register_heif_opener, HeifFile
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -342,273 +343,515 @@ def create_dynamic_desktop_plist(images_with_hours: List[tuple]) -> bytes:
     
     return plist_bytes
 
-
-def find_uuid_box(heic_data: bytes, uuid_bytes: bytes) -> Optional[Tuple[int, int]]:
+def get_normalized_time(hour_str: str) -> float:
     """
-    Find a UUID box in HEIC/ISO BMFF data.
+    Convertit une heure 'HH:MM' en valeur normalisée (0.0 à 1.0).
+    Exemple: "06:00" -> 0.25, "12:00" -> 0.5, "18:00" -> 0.75
+    """
+    if not hour_str:
+        return 0.0
+        
+    parts = hour_str.split(":")
+    h = int(parts[0])
+    m = int(parts[1])
     
+    # Calcul des secondes totales écoulées depuis minuit
+    total_seconds = (h * 3600) + (m * 60)
+    
+    # Normalisation sur 24h (86400 secondes)
+    return total_seconds / 86400.0
+
+def create_time_based_plist(images_with_hours: List[tuple]) -> bytes:
+    ti_entries = []
+    temp_entries = []
+    
+    # 1. Extraction et Normalisation
+    for idx, (img_data, hour) in enumerate(images_with_hours):
+        if hour:
+            # Conversion forcée en float
+            norm_time = float(get_normalized_time(hour))
+            # Conversion forcée en int pour l'index
+            temp_entries.append((int(idx), norm_time))
+    
+    # 2. Tri Chronologique (CRITIQUE)
+    temp_entries.sort(key=lambda x: x[1])
+    
+    # 3. Construction de la liste 'ti'
+    for img_idx, norm_time in temp_entries:
+        ti_entries.append({
+            "i": img_idx, 
+            "t": norm_time
+        })
+
+    # 4. Calcul des Fallbacks (Light/Dark)
+    # Light = le plus proche de midi (0.5)
+    # Dark = le plus proche de minuit (distance min vers 0.0 ou 1.0)
+    light_index = min(temp_entries, key=lambda x: abs(x[1] - 0.5))[0]
+    
+    def dist_to_midnight(t):
+        return min(abs(t - 0.0), abs(t - 1.0))
+    dark_index = min(temp_entries, key=lambda x: dist_to_midnight(x[1]))[0]
+
+    # 5. Structure Finale
+    plist_data = {
+        "ti": ti_entries,
+        "l": int(light_index),
+        "d": int(dark_index)
+    }
+    
+    # Debug pour voir ce qu'on envoie
+    logger.info(f"Plist Data: {plist_data}")
+    
+    return plistlib.dumps(plist_data, fmt=plistlib.FMT_BINARY)
+
+def create_xmp_metadata(plist_bytes: bytes) -> bytes:
+    """
+    Crée le bloc de métadonnées XMP au format XML attendu par macOS
+    pour un fond d'écran dynamique basé sur l'heure (h24).
+
     Args:
-        heic_data: HEIC file bytes
-        uuid_bytes: UUID bytes to search for (16 bytes)
+        plist_bytes: La structure plist binaire générée (contenant la clé 'time').
         
     Returns:
-        Tuple (offset, size) of the UUID box if found, None otherwise
+        Les bytes du bloc XMP complet.
     """
-    def parse_box(start_pos: int, max_pos: int) -> Optional[Tuple[int, int]]:
-        """Recursively parse boxes to find UUID box."""
-        pos = start_pos
-        while pos < max_pos - 8:
-            # Read box size (4 bytes, big-endian)
-            if pos + 4 > max_pos:
-                break
-            box_size = struct.unpack(">I", heic_data[pos:pos+4])[0]
-            
-            # Read box type (4 bytes)
-            if pos + 8 > max_pos:
-                break
-            box_type = heic_data[pos+4:pos+8]
-            
-            # Handle large size (size == 1 means extended size follows)
-            header_size = 8
-            if box_size == 1:
-                if pos + 16 > max_pos:
-                    break
-                box_size = struct.unpack(">Q", heic_data[pos+8:pos+16])[0]
-                header_size = 16
-            elif box_size == 0:
-                # Box extends to end of container
-                box_size = max_pos - pos
-            
-            # Check if this is a UUID box
-            if box_type == b"uuid":
-                uuid_start = pos + header_size
-                if uuid_start + 16 <= max_pos and uuid_start + 16 <= pos + box_size:
-                    box_uuid = heic_data[uuid_start:uuid_start+16]
-                    if box_uuid == uuid_bytes:
-                        return (pos, box_size)
-            
-            # Recursively search in container boxes
-            if box_type in [b"meta", b"moov", b"trak", b"mdia", b"minf", b"stbl", b"iloc", b"iinf", b"iref"]:
-                # Container box - search inside
-                inner_start = pos + header_size
-                inner_end = min(pos + box_size, max_pos)
-                if inner_start < inner_end:
-                    result = parse_box(inner_start, inner_end)
-                    if result:
-                        return result
-            
-            # Move to next box
-            if box_size == 0:
-                break
-            pos += box_size
-        
-        return None
     
-    return parse_box(0, len(heic_data))
+    # 1. Encodage strict en une seule ligne (Base64)
+    # L'encodage 'ascii' est souvent préférable pour le Base64 car il n'utilise que des caractères ASCII.
+    # .replace('\n', '') s'assure qu'il n'y a pas de sauts de ligne, ce qui est essentiel dans le XML.
+    plist_b64 = base64.b64encode(plist_bytes).decode('ascii').replace('\n', '')
+    
+    # 2. Template XMP "Canonical" pour macOS
+    # MODIFICATION CRITIQUE: Remplacement de <apple_desktop:solar> par <apple_desktop:h24>
+    # Notez que le préambule commence par l'indicateur de Byte Order Mark (BOM) '\ufeff'.
+    xmp_content = f"""<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="XMP Core 5.4.0">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:apple_desktop="http://ns.apple.com/namespace/1.0/">
+   <apple_desktop:h24>{plist_b64}</apple_desktop:h24>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>"""
+
+    # 3. Encodage final
+    # Le bloc XMP doit être encodé en UTF-8 avant d'être injecté dans le fichier image.
+    return xmp_content.encode('utf-8')
+
+# def find_uuid_box(heic_data: bytes, uuid_bytes: bytes) -> Optional[Tuple[int, int]]:
+#     """
+#     Find a UUID box in HEIC/ISO BMFF data.
+    
+#     Args:
+#         heic_data: HEIC file bytes
+#         uuid_bytes: UUID bytes to search for (16 bytes)
+        
+#     Returns:
+#         Tuple (offset, size) of the UUID box if found, None otherwise
+#     """
+#     def parse_box(start_pos: int, max_pos: int) -> Optional[Tuple[int, int]]:
+#         """Recursively parse boxes to find UUID box."""
+#         pos = start_pos
+#         while pos < max_pos - 8:
+#             # Read box size (4 bytes, big-endian)
+#             if pos + 4 > max_pos:
+#                 break
+#             box_size = struct.unpack(">I", heic_data[pos:pos+4])[0]
+            
+#             # Read box type (4 bytes)
+#             if pos + 8 > max_pos:
+#                 break
+#             box_type = heic_data[pos+4:pos+8]
+            
+#             # Handle large size (size == 1 means extended size follows)
+#             header_size = 8
+#             if box_size == 1:
+#                 if pos + 16 > max_pos:
+#                     break
+#                 box_size = struct.unpack(">Q", heic_data[pos+8:pos+16])[0]
+#                 header_size = 16
+#             elif box_size == 0:
+#                 # Box extends to end of container
+#                 box_size = max_pos - pos
+            
+#             # Check if this is a UUID box
+#             if box_type == b"uuid":
+#                 uuid_start = pos + header_size
+#                 if uuid_start + 16 <= max_pos and uuid_start + 16 <= pos + box_size:
+#                     box_uuid = heic_data[uuid_start:uuid_start+16]
+#                     if box_uuid == uuid_bytes:
+#                         return (pos, box_size)
+            
+#             # Recursively search in container boxes
+#             if box_type in [b"meta", b"moov", b"trak", b"mdia", b"minf", b"stbl", b"iloc", b"iinf", b"iref"]:
+#                 # Container box - search inside
+#                 inner_start = pos + header_size
+#                 inner_end = min(pos + box_size, max_pos)
+#                 if inner_start < inner_end:
+#                     result = parse_box(inner_start, inner_end)
+#                     if result:
+#                         return result
+            
+#             # Move to next box
+#             if box_size == 0:
+#                 break
+#             pos += box_size
+        
+#         return None
+    
+#     return parse_box(0, len(heic_data))
 
 
-def create_uuid_box(uuid_bytes: bytes, plist_data: bytes) -> bytes:
-    """
-    Create a UUID box with the given UUID and data.
+# def create_uuid_box(uuid_bytes: bytes, plist_data: bytes) -> bytes:
+#     """
+#     Create a UUID box with the given UUID and data.
     
-    Args:
-        uuid_bytes: UUID bytes (16 bytes)
-        plist_data: Data to store in the box
+#     Args:
+#         uuid_bytes: UUID bytes (16 bytes)
+#         plist_data: Data to store in the box
         
-    Returns:
-        Complete UUID box bytes
-    """
-    # Box structure: size (4) + type (4) + uuid (16) + data
-    box_type = b"uuid"
-    data_size = len(plist_data)
-    total_size = 8 + 16 + data_size
+#     Returns:
+#         Complete UUID box bytes
+#     """
+#     # Box structure: size (4) + type (4) + uuid (16) + data
+#     box_type = b"uuid"
+#     data_size = len(plist_data)
+#     total_size = 8 + 16 + data_size
     
-    # Create box
-    box = struct.pack(">I", total_size)  # size
-    box += box_type  # type
-    box += uuid_bytes  # uuid
-    box += plist_data  # data
+#     # Create box
+#     box = struct.pack(">I", total_size)  # size
+#     box += box_type  # type
+#     box += uuid_bytes  # uuid
+#     box += plist_data  # data
     
-    return box
+#     return box
 
 
-def inject_uuid_box(heic_data: bytes, uuid_bytes: bytes, plist_data: bytes) -> bytes:
-    """
-    Inject or replace a UUID box in HEIC/ISO BMFF data.
+# def inject_uuid_box(heic_data: bytes, uuid_bytes: bytes, plist_data: bytes) -> bytes:
+#     """
+#     Inject or replace a UUID box in HEIC/ISO BMFF data.
     
-    Args:
-        heic_data: Original HEIC file bytes
-        uuid_bytes: UUID bytes (16 bytes) for Dynamic Desktop
-        plist_data: Plist binary data to inject
+#     Args:
+#         heic_data: Original HEIC file bytes
+#         uuid_bytes: UUID bytes (16 bytes) for Dynamic Desktop
+#         plist_data: Plist binary data to inject
         
-    Returns:
-        Modified HEIC file bytes with UUID box injected/replaced
-    """
-    # Find existing UUID box
-    uuid_box_info = find_uuid_box(heic_data, uuid_bytes)
+#     Returns:
+#         Modified HEIC file bytes with UUID box injected/replaced
+#     """
+#     # Find existing UUID box
+#     uuid_box_info = find_uuid_box(heic_data, uuid_bytes)
     
-    # Create new UUID box
-    new_uuid_box = create_uuid_box(uuid_bytes, plist_data)
+#     # Create new UUID box
+#     new_uuid_box = create_uuid_box(uuid_bytes, plist_data)
     
-    if uuid_box_info:
-        # Replace existing box
-        offset, old_size = uuid_box_info
+#     if uuid_box_info:
+#         # Replace existing box
+#         offset, old_size = uuid_box_info
         
-        # Calculate size difference
-        new_size = len(new_uuid_box)
-        size_diff = new_size - old_size
+#         # Calculate size difference
+#         new_size = len(new_uuid_box)
+#         size_diff = new_size - old_size
         
-        if size_diff == 0:
-            # Same size, simple replacement
-            result = heic_data[:offset] + new_uuid_box + heic_data[offset + old_size:]
-        else:
-            # Different size, need to update box sizes
-            # Replace the box
-            result = heic_data[:offset] + new_uuid_box + heic_data[offset + old_size:]
-            # Update the size field of the replaced box
-            result = result[:offset] + struct.pack(">I", new_size) + result[offset + 4:]
-            # Note: We may need to update parent container sizes, but for simplicity
-            # we'll assume the file structure can accommodate the size change
+#         if size_diff == 0:
+#             # Same size, simple replacement
+#             result = heic_data[:offset] + new_uuid_box + heic_data[offset + old_size:]
+#         else:
+#             # Different size, need to update box sizes
+#             # Replace the box
+#             result = heic_data[:offset] + new_uuid_box + heic_data[offset + old_size:]
+#             # Update the size field of the replaced box
+#             result = result[:offset] + struct.pack(">I", new_size) + result[offset + 4:]
+#             # Note: We may need to update parent container sizes, but for simplicity
+#             # we'll assume the file structure can accommodate the size change
         
-        logger.info(f"Replaced existing UUID box at offset {offset} (old size: {old_size}, new size: {new_size})")
-    else:
-        # Insert new UUID box in 'meta' box if it exists, otherwise after 'ftyp'
-        # Find 'meta' box position
-        meta_pos = -1
-        meta_end = -1
+#         logger.info(f"Replaced existing UUID box at offset {offset} (old size: {old_size}, new size: {new_size})")
+#     else:
+#         # Insert new UUID box in 'meta' box if it exists, otherwise after 'ftyp'
+#         # Find 'meta' box position
+#         meta_pos = -1
+#         meta_end = -1
         
-        pos = 0
-        while pos < len(heic_data) - 8:
-            if pos + 8 > len(heic_data):
-                break
-            box_size = struct.unpack(">I", heic_data[pos:pos+4])[0]
-            box_type = heic_data[pos+4:pos+8]
+#         pos = 0
+#         while pos < len(heic_data) - 8:
+#             if pos + 8 > len(heic_data):
+#                 break
+#             box_size = struct.unpack(">I", heic_data[pos:pos+4])[0]
+#             box_type = heic_data[pos+4:pos+8]
             
-            header_size = 8
-            if box_size == 1:
-                if pos + 16 > len(heic_data):
-                    break
-                box_size = struct.unpack(">Q", heic_data[pos+8:pos+16])[0]
-                header_size = 16
-            elif box_size == 0:
-                break
+#             header_size = 8
+#             if box_size == 1:
+#                 if pos + 16 > len(heic_data):
+#                     break
+#                 box_size = struct.unpack(">Q", heic_data[pos+8:pos+16])[0]
+#                 header_size = 16
+#             elif box_size == 0:
+#                 break
             
-            if box_type == b"meta":
-                meta_pos = pos
-                meta_end = pos + box_size
-                break
+#             if box_type == b"meta":
+#                 meta_pos = pos
+#                 meta_end = pos + box_size
+#                 break
             
-            pos += box_size
+#             pos += box_size
         
-        if meta_pos != -1 and meta_end != -1:
-            # Insert inside meta box, after its header
-            # Meta box header: size (4) + type (4) + version/flags (4) = 12 bytes
-            meta_header_size = 12
-            insert_pos = meta_pos + meta_header_size
+#         if meta_pos != -1 and meta_end != -1:
+#             # Insert inside meta box, after its header
+#             # Meta box header: size (4) + type (4) + version/flags (4) = 12 bytes
+#             meta_header_size = 12
+#             insert_pos = meta_pos + meta_header_size
             
-            # Insert UUID box inside meta box
-            result = heic_data[:insert_pos] + new_uuid_box + heic_data[insert_pos:]
+#             # Insert UUID box inside meta box
+#             result = heic_data[:insert_pos] + new_uuid_box + heic_data[insert_pos:]
             
-            # Update meta box size
-            new_meta_size = (meta_end - meta_pos) + len(new_uuid_box)
-            result = result[:meta_pos] + struct.pack(">I", new_meta_size) + result[meta_pos + 4:]
+#             # Update meta box size
+#             new_meta_size = (meta_end - meta_pos) + len(new_uuid_box)
+#             result = result[:meta_pos] + struct.pack(">I", new_meta_size) + result[meta_pos + 4:]
             
-            logger.info(f"Inserted new UUID box inside meta box at offset {insert_pos}")
-        else:
-            # Find 'ftyp' box and insert after it
-            ftyp_pos = heic_data.find(b"ftyp")
-            if ftyp_pos != -1 and ftyp_pos + 4 <= len(heic_data):
-                # Read ftyp box size
-                ftyp_size = struct.unpack(">I", heic_data[ftyp_pos:ftyp_pos+4])[0]
-                if ftyp_size == 0:
-                    ftyp_size = 8  # Minimum size
-                insert_pos = ftyp_pos + ftyp_size
-                result = heic_data[:insert_pos] + new_uuid_box + heic_data[insert_pos:]
-                logger.info(f"Inserted new UUID box after ftyp box at offset {insert_pos}")
-            else:
-                # Fallback: insert at position 8 (after potential initial box)
-                result = heic_data[:8] + new_uuid_box + heic_data[8:]
-                logger.info("Inserted new UUID box at offset 8 (fallback)")
+#             logger.info(f"Inserted new UUID box inside meta box at offset {insert_pos}")
+#         else:
+#             # Find 'ftyp' box and insert after it
+#             ftyp_pos = heic_data.find(b"ftyp")
+#             if ftyp_pos != -1 and ftyp_pos + 4 <= len(heic_data):
+#                 # Read ftyp box size
+#                 ftyp_size = struct.unpack(">I", heic_data[ftyp_pos:ftyp_pos+4])[0]
+#                 if ftyp_size == 0:
+#                     ftyp_size = 8  # Minimum size
+#                 insert_pos = ftyp_pos + ftyp_size
+#                 result = heic_data[:insert_pos] + new_uuid_box + heic_data[insert_pos:]
+#                 logger.info(f"Inserted new UUID box after ftyp box at offset {insert_pos}")
+#             else:
+#                 # Fallback: insert at position 8 (after potential initial box)
+#                 result = heic_data[:8] + new_uuid_box + heic_data[8:]
+#                 logger.info("Inserted new UUID box at offset 8 (fallback)")
     
-    return result
+#     return result
+
+
+# def create_heic_with_multiple_images(images_with_hours: List[tuple]) -> bytes:
+#     """
+#     Create a single HEIC file containing multiple images with Dynamic Desktop Plist metadata
+#     injected into a UUID box for macOS dynamic wallpaper time-shifting.
+    
+#     Args:
+#         images_with_hours: List of tuples (image_bytes, hour) where:
+#             - image_bytes: PNG image bytes to convert to HEIC
+#             - hour: Hour in HH:MM format to embed as temporal metadata (None for original image)
+        
+#     Returns:
+#         HEIC file bytes containing all images with embedded Dynamic Desktop Plist metadata in UUID box
+#     """
+#     try:
+#         # Validate and prepare images with hours
+#         # Filter out None hours and create sorted list for validation
+#         time_entries_data = []
+#         for idx, (image_bytes, hour) in enumerate(images_with_hours):
+#             if hour:
+#                 decimal_hours = hour_to_decimal(hour)
+#                 time_entries_data.append((idx, decimal_hours, hour))
+        
+#         # Sort by start time to ensure ascending order
+#         time_entries_data.sort(key=lambda x: x[1])
+        
+#         # Verify image indices match
+#         for i, (idx, decimal_hours, hour) in enumerate(time_entries_data):
+#             if idx >= len(images_with_hours):
+#                 raise ValueError(f"Image index {idx} is out of range (total images: {len(images_with_hours)})")
+#             logger.debug(f"Time entry {i}: image={idx}, start={decimal_hours:.2f} ({hour})")
+        
+#         # Create HeifFile and add all images
+#         heif_file = HeifFile()
+        
+#         for idx, (image_bytes, hour) in enumerate(images_with_hours):
+#             # Validate image bytes
+#             if not image_bytes or len(image_bytes) == 0:
+#                 raise ValueError(f"Image {idx + 1} has empty bytes (hour: {hour or 'original'})")
+            
+#             # Open image from bytes - create fresh BytesIO for each image
+#             try:
+#                 image_buffer = BytesIO(image_bytes)
+#                 image = Image.open(image_buffer)
+#                 # Load image to ensure it's fully decoded and in memory
+#                 image.load()
+#                 # Close the buffer to free memory
+#                 image_buffer.close()
+#             except Exception as e:
+#                 logger.error(f"Failed to open image {idx + 1} (hour: {hour or 'original'}): {str(e)}")
+#                 raise ValueError(f"Invalid image data for image {idx + 1}: {str(e)}")
+            
+#             # Log image info
+#             logger.debug(f"Processing image {idx + 1}: mode={image.mode}, size={image.size}, hour={hour or 'original'}")
+            
+#             # Ensure image is loaded and has valid dimensions
+#             if not hasattr(image, 'size') or image.size[0] == 0 or image.size[1] == 0:
+#                 raise ValueError(f"Image {idx + 1} has invalid dimensions: {image.size if hasattr(image, 'size') else 'unknown'}")
+            
+#             # Ensure image has valid data by checking a pixel
+#             try:
+#                 # Try to access a pixel to ensure image is loaded
+#                 test_pixel = image.getpixel((0, 0))
+#                 logger.debug(f"Image {idx + 1} pixel check passed: {test_pixel}")
+#             except Exception as e:
+#                 logger.warning(f"Could not access pixel from image {idx + 1}: {str(e)}")
+            
+#             # Convert RGBA to RGB if necessary (HEIC doesn't support alpha channel well)
+#             if image.mode == "RGBA":
+#                 rgb_image = Image.new("RGB", image.size, (255, 255, 255))
+#                 rgb_image.paste(image, mask=image.split()[3] if len(image.split()) == 4 else None)
+#                 image = rgb_image
+#             elif image.mode != "RGB":
+#                 image = image.convert("RGB")
+            
+#             # Verify image has valid size
+#             if image.size[0] == 0 or image.size[1] == 0:
+#                 raise ValueError(f"Image {idx + 1} has invalid size: {image.size}")
+            
+#             # Add image to HeifFile
+#             try:
+#                 heif_file.add_from_pillow(image)
+#                 logger.debug(f"Successfully added image {idx + 1} to HEIC file (hour: {hour or 'original'}, size: {image.size})")
+#             except Exception as e:
+#                 logger.error(f"Failed to add image {idx + 1} to HeifFile: {str(e)}")
+#                 raise
+        
+#         # Create Dynamic Desktop Plist with 'time' key
+#         metadata_list = []
+#         if time_entries_data:
+#             try:
+#                 plist_bytes = create_dynamic_desktop_plist(images_with_hours)
+#                 logger.debug(f"Created Plist with {len(plist_bytes)} bytes")
+                
+#                 # UUID for macOS Dynamic Desktop: B1B2B3B4-B5B6-B7B8-B9BA-BBBBBCBDBEBF
+#                 # Convert to bytes (remove dashes)
+#                 dynamic_desktop_uuid_hex = "B1B2B3B4B5B6B7B8B9BABBBBBCBDBEBF"
+#                 dynamic_desktop_uuid_bytes = bytes.fromhex(dynamic_desktop_uuid_hex)
+                
+#                 # Create metadata item for UUID box
+#                 # For pillow_heif, when type is "uuid", the data should be just the plist
+#                 # The UUID itself is specified separately or pillow_heif handles it
+#                 # Try with just plist data first
+#                 custom_metadata = {
+#                     "type": "uuid",
+#                     "content_type": "application/octet-stream",
+#                     "data": plist_bytes
+#                 }
+#                 metadata_list.append(custom_metadata)
+                
+#                 logger.debug(f"Created UUID metadata: type=uuid, data_size={len(plist_bytes)} bytes")
+                
+#                 logger.info(f"Prepared Dynamic Desktop metadata with {len(time_entries_data)} time entries")
+#             except Exception as e:
+#                 logger.error(f"Failed to create Plist metadata: {str(e)}", exc_info=True)
+#                 raise
+#         else:
+#             logger.warning("No time entries found, skipping Plist metadata")
+        
+#         # Save to HEIC format in memory with metadata
+#         heic_buffer = BytesIO()
+#         try:
+#             # Try to save with metadata using pillow_heif API
+#             if metadata_list:
+#                 try:
+#                     heif_file.save(heic_buffer, quality=90, metadata=metadata_list)
+#                     logger.debug("Saved HEIC with metadata using pillow_heif API")
+#                 except (TypeError, AttributeError) as api_error:
+#                     # If pillow_heif doesn't support metadata parameter, fall back to binary injection
+#                     logger.warning(f"pillow_heif API doesn't support metadata parameter: {str(api_error)}")
+#                     logger.info("Falling back to binary UUID box injection")
+#                     # Save without metadata first
+#                     heic_buffer = BytesIO()
+#                     heif_file.save(heic_buffer, quality=90)
+#                     heic_buffer.seek(0)
+#                     heic_bytes_temp = heic_buffer.getvalue()
+                    
+#                     # Inject UUID box using binary method
+#                     dynamic_desktop_uuid = bytes.fromhex("B1B2B3B4B5B6B7B8B9BABBBBBCBDBEBF")
+#                     heic_bytes = inject_uuid_box(heic_bytes_temp, dynamic_desktop_uuid, plist_bytes)
+#                     heic_buffer = BytesIO(heic_bytes)
+#             else:
+#                 heif_file.save(heic_buffer, quality=90)
+            
+#             heic_buffer.seek(0)
+#             heic_bytes = heic_buffer.getvalue()
+            
+#             if not heic_bytes or len(heic_bytes) == 0:
+#                 raise ValueError("HEIC file is empty after save")
+            
+#             logger.info(f"HEIC file created successfully, size: {len(heic_bytes)} bytes, images: {len(images_with_hours)}, metadata: {len(metadata_list)} items")
+#         except Exception as e:
+#             logger.error(f"Failed to save HEIC file: {str(e)}", exc_info=True)
+#             raise
+        
+#         return heic_bytes
+        
+#     except Exception as e:
+#         logger.error(f"Failed to create HEIC with multiple images: {str(e)}", exc_info=True)
+#         raise
 
 
 def create_heic_with_multiple_images(images_with_hours: List[tuple]) -> bytes:
-    """
-    Create a single HEIC file containing multiple images with Dynamic Desktop Plist metadata
-    injected into a UUID box for macOS dynamic wallpaper time-shifting.
-    
-    Args:
-        images_with_hours: List of tuples (image_bytes, hour) where:
-            - image_bytes: PNG image bytes to convert to HEIC
-            - hour: Hour in HH:MM format to embed as temporal metadata (None for original image)
-        
-    Returns:
-        HEIC file bytes containing all images with embedded Dynamic Desktop Plist metadata in UUID box
-    """
     try:
-        # Validate and prepare images with hours
-        # Filter out None hours and create sorted list for validation
-        time_entries_data = []
-        for idx, (image_bytes, hour) in enumerate(images_with_hours):
-            if hour:
-                decimal_hours = hour_to_decimal(hour)
-                time_entries_data.append((idx, decimal_hours, hour))
-        
-        # Sort by start time to ensure ascending order
-        time_entries_data.sort(key=lambda x: x[1])
-        
-        # Verify image indices match
-        for i, (idx, decimal_hours, hour) in enumerate(time_entries_data):
-            if idx >= len(images_with_hours):
-                raise ValueError(f"Image index {idx} is out of range (total images: {len(images_with_hours)})")
-            logger.debug(f"Time entry {i}: image={idx}, start={decimal_hours:.2f} ({hour})")
-        
-        # Create HeifFile and add all images
+        # Initialisation du fichier HEIF
         heif_file = HeifFile()
         
-        for idx, (image_bytes, hour) in enumerate(images_with_hours):
-            # Open image from bytes
-            image = Image.open(BytesIO(image_bytes))
-            
-            # Convert RGBA to RGB if necessary (HEIC doesn't support alpha channel well)
-            if image.mode == "RGBA":
-                rgb_image = Image.new("RGB", image.size, (255, 255, 255))
-                rgb_image.paste(image, mask=image.split()[3] if len(image.split()) == 4 else None)
-                image = rgb_image
-            elif image.mode != "RGB":
-                image = image.convert("RGB")
-            
-            # Add image to HeifFile
-            heif_file.add_from_pillow(image)
-            
-            logger.debug(f"Added image {idx + 1} to HEIC file (hour: {hour or 'original'})")
-        
-        # Save to HEIC format in memory
-        heic_buffer = BytesIO()
-        heif_file.save(heic_buffer, quality=90)
-        heic_buffer.seek(0)
-        heic_bytes = heic_buffer.getvalue()
-        
-        # Create Dynamic Desktop Plist with 'time' key
-        if time_entries_data:
-            plist_bytes = create_dynamic_desktop_plist(images_with_hours)
-            
-            # UUID for macOS Dynamic Desktop: B1B2B3B4-B5B6-B7B8-B9BA-BBBBBCBDBEBF
-            dynamic_desktop_uuid = bytes.fromhex("B1B2B3B4B5B6B7B8B9BABBBBBCBDBEBF")
-            
-            # Inject UUID box with Plist data
-            heic_bytes = inject_uuid_box(heic_bytes, dynamic_desktop_uuid, plist_bytes)
-            logger.info(f"Injected Dynamic Desktop Plist into UUID box with {len(time_entries_data)} time entries")
-        else:
-            logger.warning("No time entries found, skipping Plist injection")
-        
-        return heic_bytes
-        
-    except Exception as e:
-        logger.error(f"Failed to create HEIC with multiple images: {str(e)}", exc_info=True)
-        raise
+        # Vérification de sécurité
+        total_images = len(images_with_hours)
 
+        # Ajout des images
+        for idx, (image_bytes, hour) in enumerate(images_with_hours):
+            # Si par erreur votre logique a généré plus d'entrées que d'images réelles
+            if idx >= total_images:
+                logger.error(f"Index mismatch: Image {idx} requested but only {total_images} in HEIC")
+                raise ValueError("Index mismatch in HEIC generation")
+            try:
+                image_buffer = BytesIO(image_bytes)
+                image = Image.open(image_buffer)
+                image.load()
+                
+                # Conversion RGB standard
+                if image.mode == "RGBA":
+                    rgb_image = Image.new("RGB", image.size, (255, 255, 255))
+                    rgb_image.paste(image, mask=image.split()[3])
+                    image = rgb_image
+                elif image.mode != "RGB":
+                    image = image.convert("RGB")
+                
+                heif_file.add_from_pillow(image)
+                
+            except Exception as e:
+                logger.error(f"Failed to add image {idx}: {str(e)}")
+                raise
+
+        # Génération des métadonnées basées sur l'heure
+        xmp_data = None
+        if len(images_with_hours) > 1:
+            try:
+                # 1. Utiliser la nouvelle fonction 'create_time_based_plist'
+                plist_bytes = create_time_based_plist(images_with_hours)
+                
+                # 2. Encapsuler dans le XMP (fonction identique à la réponse précédente)
+                xmp_data = create_xmp_metadata(plist_bytes)
+                
+                logger.info(f"Generated Time-Based XMP metadata")
+            except Exception as e:
+                logger.error(f"Failed to create metadata: {str(e)}")
+
+        # Sauvegarde
+        heic_buffer = BytesIO()
+        save_args = {"quality": 90}
+        
+        if xmp_data:
+            save_args["xmp"] = xmp_data
+
+        heif_file.save(heic_buffer, **save_args)
+        
+        heic_buffer.seek(0)
+        return heic_buffer.getvalue()
+
+    except Exception as e:
+        logger.error(f"Failed to create HEIC: {str(e)}", exc_info=True)
+        raise
 
 async def process_upscale_background(task_id: int) -> None:
     """
