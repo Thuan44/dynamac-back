@@ -5,6 +5,7 @@ from routes.upload import router as upload_router
 from routes.config import router as config_router
 from routes.generate import router as generate_router
 from routes.status import router as status_router
+import os
 
 # Configure logging
 logging.basicConfig(
@@ -24,10 +25,10 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://dynamac.zite.so"],
+    allow_origins=["https://dynamac.zite.so" if os.getenv("ENV") == "production" else "*"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # Include routers

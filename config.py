@@ -6,6 +6,9 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
+    # Environment
+    env: str = "development"
+
     supabase_url: str
     supabase_service_key: str
 
