@@ -42,11 +42,12 @@ allowed_origins = (
 
 # Add CSRF protection middleware (before CORS)
 # In production, require CSRF tokens. In development, use origin + X-Requested-With
-app.add_middleware(
-    CSRFProtectionMiddleware,
-    allowed_origins=allowed_origins,
-    require_token=(os.getenv("ENV") == "production")
-)
+# TEMPORARILY DISABLED - Uncomment to re-enable CSRF protection
+# app.add_middleware(
+#     CSRFProtectionMiddleware,
+#     allowed_origins=allowed_origins,
+#     require_token=(os.getenv("ENV") == "production")
+# )
 
 # Add payload size limit middleware
 app.add_middleware(PayloadSizeLimitMiddleware)
