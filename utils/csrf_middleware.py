@@ -86,8 +86,4 @@ class CSRFProtectionMiddleware(BaseHTTPMiddleware):
         # Process request
         response = await call_next(request)
         
-        # Add CSRF protection headers to response
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        
         return response

@@ -6,6 +6,7 @@ from slowapi.errors import RateLimitExceeded
 from utils.rate_limiter import limiter
 from utils.payload_validation import PayloadSizeLimitMiddleware
 from utils.csrf_middleware import CSRFProtectionMiddleware
+from utils.security_headers import SecurityHeadersMiddleware
 from routes.upload import router as upload_router
 from routes.config import router as config_router
 from routes.generate import router as generate_router
@@ -57,6 +58,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type", "Authorization", "X-CSRF-Token", "X-Requested-With"],
+)
+
+# Add security headers middleware
+# Enable HSTS in production (HTTPS required)
+is_production = os.getenv("ENV") == "production"
+app.add_middleware(
+    SecurityHeadersMiddleware,
+    enable_hsts=is_production,  # Only enable HSTS in production with HTTPS
+    hsts_max_age=31536000,  # 1 year
 )
 
 # Include routers
