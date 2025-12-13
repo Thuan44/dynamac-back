@@ -36,12 +36,16 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
         
         # Validate file (size, magic bytes, image integrity)
         # This validates the actual file content, not just the client-provided content-type
+        # SECURITY: Client-provided filename extension is completely ignored and never used
         mime_type, file_extension = validate_uploaded_file(
             file_content=file_content,
-            client_content_type=file.content_type
+            client_content_type=file.content_type,
+            client_filename=file.filename  # Only for logging/warning, never trusted
         )
         
-        # Generate unique file name using validated extension (ignore client-provided extension)
+        # Generate unique file name using validated extension
+        # IMPORTANT: We completely ignore the client-provided filename extension
+        # The extension is determined solely from the validated MIME type (magic bytes)
         file_name = f"{uuid.uuid4()}.{file_extension}"
         
         # Upload to Supabase Storage using validated MIME type
