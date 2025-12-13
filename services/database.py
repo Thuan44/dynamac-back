@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timedelta
+from typing import Optional
 from supabase import create_client, Client
 from config import settings
 from models.task import TaskCreate, TaskResponse
@@ -281,6 +282,57 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"Failed to update task final URL {task_id}: {str(e)}")
             raise
+    
+    def update_task_processing_started(self, task_id: int) -> datetime:
+        """
+        Mark task as processing and store started_at timestamp.
+        
+        Args:
+            task_id: ID of the task to update
+            
+        Returns:
+            The started_at datetime that was stored
+        """
+        try:
+            started_at = datetime.utcnow()
+            response = (
+                self.client.table("tasks")
+                .update({
+                    "state": "processing",
+                    "started_at": started_at.isoformat()
+                })
+                .eq("id", task_id)
+                .execute()
+            )
+            
+            if response.data is None or len(response.data) == 0:
+                raise Exception(f"Task not found for id: {task_id}")
+            
+            logger.info(f"Task marked as processing with started_at: {task_id}")
+            return started_at
+        except Exception as e:
+            logger.error(f"Failed to update task processing started {task_id}: {str(e)}")
+            raise
+    
+    def get_task_started_at(self, task_id: int) -> Optional[datetime]:
+        """
+        Get the started_at timestamp for a task.
+        
+        Args:
+            task_id: ID of the task to retrieve
+            
+        Returns:
+            The started_at datetime if available, None otherwise
+        """
+        try:
+            task_data = self.get_task_raw(task_id)
+            started_at = task_data.get("started_at")
+            if started_at:
+                return parse_datetime(started_at)
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get task started_at {task_id}: {str(e)}")
+            return None
     
     def delete_task(self, task_id: int) -> None:
         """

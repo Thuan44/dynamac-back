@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import uuid
+import time
+from datetime import datetime
 from io import BytesIO
 from typing import List, Dict, Any
 
@@ -27,30 +29,26 @@ async def process_upscale_background(task_id: int) -> None:
     - For AI variants: download thumbnail and upscale it to 16:9 format
     - Upload to 'upscaled' bucket and store urls_renders
     
-    This function has a global timeout to prevent indefinite blocking.
+    No asyncio timeout wrapper - business timeout logic is handled internally
+    based on started_at timestamp and duration checks.
     """
     try:
-        # Wrap the entire task with a global timeout
-        await asyncio.wait_for(
-            _process_upscale_internal(task_id),
-            timeout=settings.timeout_background_task
-        )
-    except asyncio.TimeoutError:
-        logger.error(f"Background upscale task {task_id} exceeded global timeout of {settings.timeout_background_task}s")
-        try:
-            database_service.update_task_state(task_id, "previews_ready")
-        except Exception:
-            pass
+        await _process_upscale_internal(task_id)
+    except asyncio.CancelledError:
+        # Preserve CancelledError for shutdown/scale down scenarios
+        logger.warning(f"Background upscale task {task_id} was cancelled (shutdown/scale down)")
+        raise
     except Exception as e:
         logger.error(f"Unexpected error in background upscale for task {task_id}: {str(e)}")
-        try:
-            database_service.update_task_state(task_id, "previews_ready")
-        except Exception:
-            pass
+        # Error handling is done in _process_upscale_internal
+        raise
 
 
 async def _process_upscale_internal(task_id: int) -> None:
     """Internal function that performs the actual upscale work."""
+    # Mark task as processing and store started_at
+    started_at = database_service.update_task_processing_started(task_id)
+    
     try:
         task_data = database_service.get_task_raw(task_id)
         urls_previews = task_data.get("urls_previews", {})
@@ -118,7 +116,7 @@ async def _process_upscale_internal(task_id: int) -> None:
                 database_service.update_task_state(task_id, "previews_ready")
                 return
 
-            # Process original image with timeout
+            # Process original image (CPU-bound, no asyncio timeout)
             def process_original_image():
                 original_image = Image.open(BytesIO(source_bytes))
                 if original_image.mode == "RGBA":
@@ -132,10 +130,7 @@ async def _process_upscale_internal(task_id: int) -> None:
                 original_image.save(original_buffer, format="PNG")
                 return original_buffer.getvalue()
             
-            original_resized_bytes = await asyncio.wait_for(
-                asyncio.to_thread(process_original_image),
-                timeout=settings.timeout_image_processing
-            )
+            original_resized_bytes = await asyncio.to_thread(process_original_image)
 
             has_original_variant = any(
                 config_by_hour.get(variant.get("hour"), "ai") == "original"
@@ -223,14 +218,11 @@ async def _process_upscale_internal(task_id: int) -> None:
                             errors.append(error_msg)
                             continue
 
-                        # Upscale image with timeout
-                        render_bytes = await asyncio.wait_for(
-                            asyncio.to_thread(
-                                upscale_image,
-                                source=thumbnail_bytes,
-                                format_type="16:9"
-                            ),
-                            timeout=settings.timeout_gemini_api
+                        # Upscale image (CPU-bound, no asyncio timeout)
+                        render_bytes = await asyncio.to_thread(
+                            upscale_image,
+                            source=thumbnail_bytes,
+                            format_type="16:9"
                         )
                         render_name = f"render_{hour.replace(':', '')}_{uuid.uuid4().hex[:8]}.png"
                         render_url = await asyncio.wait_for(
@@ -263,12 +255,20 @@ async def _process_upscale_internal(task_id: int) -> None:
         try:
             if len(images_for_heic) > 0:
                 logger.info(f"Creating HEIC file with {len(images_for_heic)} images for task {task_id}")
-                # Create HEIC with timeout
-                heic_bytes = await asyncio.wait_for(
-                    asyncio.to_thread(create_heic_with_multiple_images, images_for_heic),
-                    timeout=settings.timeout_heic_creation
-                )
-                logger.info(f"HEIC file created successfully, size: {len(heic_bytes)} bytes")
+                # Create HEIC (CPU-bound, no asyncio timeout)
+                # Measure actual duration for business timeout logic
+                heic_start_time = time.time()
+                heic_bytes = await asyncio.to_thread(create_heic_with_multiple_images, images_for_heic)
+                heic_duration = time.time() - heic_start_time
+                logger.info(f"HEIC file created successfully in {heic_duration:.2f}s, size: {len(heic_bytes)} bytes")
+                
+                # Business timeout check: verify if duration exceeded expected timeout
+                if heic_duration > settings.timeout_heic_creation:
+                    logger.warning(
+                        f"HEIC creation for task {task_id} took {heic_duration:.2f}s, "
+                        f"exceeding expected timeout of {settings.timeout_heic_creation}s, "
+                        f"but operation completed successfully"
+                    )
 
                 heic_name = f"dynamic_{task_id}_{uuid.uuid4().hex[:8]}.heic"
                 logger.info(f"Uploading HEIC file to dynamics bucket: {heic_name}")
@@ -295,13 +295,32 @@ async def _process_upscale_internal(task_id: int) -> None:
         except Exception as heic_error:
             logger.error(f"Failed to create or upload HEIC file for task {task_id}: {str(heic_error)}", exc_info=True)
             heic_created = False
+            # Check if this is a timeout scenario based on started_at
+            try:
+                task_started_at = database_service.get_task_started_at(task_id)
+                if task_started_at:
+                    elapsed = (datetime.utcnow() - task_started_at).total_seconds()
+                    if elapsed > settings.timeout_heic_creation:
+                        logger.error(
+                            f"HEIC creation failed for task {task_id} after {elapsed:.2f}s, "
+                            f"exceeding timeout of {settings.timeout_heic_creation}s"
+                        )
+                        try:
+                            database_service.update_task_state(task_id, "timeout")
+                        except Exception:
+                            pass
+                        return
+            except Exception:
+                pass
+            # If not a timeout, mark as failed_heic
+            try:
+                database_service.update_task_state(task_id, "failed_heic")
+            except Exception:
+                pass
 
         if not heic_created:
             logger.error(f"Cannot proceed to renders_ready for task {task_id}: HEIC file was not created successfully")
-            try:
-                database_service.update_task_state(task_id, "previews_ready")
-            except Exception as state_error:
-                logger.error(f"Failed to reset task state for task {task_id}: {str(state_error)}")
+            # State already updated above if needed
             return
 
         try:
@@ -313,9 +332,35 @@ async def _process_upscale_internal(task_id: int) -> None:
                 database_service.update_task_state(task_id, "previews_ready")
             except Exception:
                 pass
-    except asyncio.TimeoutError:
-        logger.error(f"Operation timeout in upscale task {task_id}")
+    except asyncio.CancelledError:
+        # Preserve CancelledError for shutdown/scale down scenarios
+        logger.warning(f"Upscale task {task_id} was cancelled (shutdown/scale down)")
+        try:
+            database_service.update_task_state(task_id, "cancelled")
+        except Exception:
+            pass
         raise
     except Exception as e:
         logger.error(f"Error in upscale task {task_id}: {str(e)}")
-        raise
+        # Check if this is a timeout scenario based on started_at
+        try:
+            task_started_at = database_service.get_task_started_at(task_id)
+            if task_started_at:
+                elapsed = (datetime.utcnow() - task_started_at).total_seconds()
+                if elapsed > settings.timeout_background_task:
+                    logger.error(
+                        f"Upscale task {task_id} failed after {elapsed:.2f}s, "
+                        f"exceeding background task timeout of {settings.timeout_background_task}s"
+                    )
+                    try:
+                        database_service.update_task_state(task_id, "timeout")
+                    except Exception:
+                        pass
+                    return
+        except Exception:
+            pass
+        # For other errors, try to reset to previous state
+        try:
+            database_service.update_task_state(task_id, "previews_ready")
+        except Exception:
+            pass

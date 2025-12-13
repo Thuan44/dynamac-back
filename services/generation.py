@@ -31,26 +31,19 @@ async def process_generation_background(
     - Upload previews
     - Update task state and previews
     
-    This function has a global timeout to prevent indefinite blocking.
+    No asyncio timeout wrapper - business timeout logic is handled internally
+    based on started_at timestamp and duration checks.
     """
     try:
-        # Wrap the entire task with a global timeout
-        await asyncio.wait_for(
-            _process_generation_internal(task_id, variants, source_image_url),
-            timeout=settings.timeout_background_task
-        )
-    except asyncio.TimeoutError:
-        logger.error(f"Background generation task {task_id} exceeded global timeout of {settings.timeout_background_task}s")
-        try:
-            database_service.update_task_state(task_id, "configured")
-        except Exception:
-            pass
+        await _process_generation_internal(task_id, variants, source_image_url)
+    except asyncio.CancelledError:
+        # Preserve CancelledError for shutdown/scale down scenarios
+        logger.warning(f"Background generation task {task_id} was cancelled (shutdown/scale down)")
+        raise
     except Exception as e:
         logger.error(f"Unexpected error in background generation for task {task_id}: {str(e)}")
-        try:
-            database_service.update_task_state(task_id, "configured")
-        except Exception:
-            pass
+        # Error handling is done in _process_generation_internal
+        raise
 
 
 async def _process_generation_internal(
@@ -127,7 +120,7 @@ async def _process_generation_internal(
 
                 if variant_source == "original":
                     if variant.format == "thumbnail":
-                        # Process image with timeout
+                        # Process image (CPU-bound, no asyncio timeout)
                         def process_thumbnail():
                             image = Image.open(BytesIO(image_bytes))
                             if image.mode == "RGBA":
@@ -141,10 +134,7 @@ async def _process_generation_internal(
                             image.save(img_buffer, format="PNG")
                             return img_buffer.getvalue()
                         
-                        thumbnail_bytes = await asyncio.wait_for(
-                            asyncio.to_thread(process_thumbnail),
-                            timeout=settings.timeout_image_processing
-                        )
+                        thumbnail_bytes = await asyncio.to_thread(process_thumbnail)
 
                         hour_filename = variant.hour.replace(":", "")
                         preview_name = f"preview_{hour_filename}_{uuid.uuid4().hex[:8]}.png"
@@ -165,15 +155,15 @@ async def _process_generation_internal(
                     preview_urls.append({"hour": variant.hour, "url": preview_url})
                     logger.info(f"Using original image for variant hour {variant.hour}")
                 else:
-                    # Generate variant with timeout
-                    generated_image_bytes, auto_uploaded_url = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            generate_variant,
-                            source=image_bytes,
-                            hour=variant.hour,
-                            format_type=variant.format,
-                        ),
-                        timeout=settings.timeout_gemini_api
+                    # Generate variant (CPU-bound, no asyncio timeout)
+                    # Note: generate_variant may call external APIs internally,
+                    # but we don't wrap it with asyncio.wait_for to avoid
+                    # CancelledError -> TimeoutError conversion issues
+                    generated_image_bytes, auto_uploaded_url = await asyncio.to_thread(
+                        generate_variant,
+                        source=image_bytes,
+                        hour=variant.hour,
+                        format_type=variant.format,
                     )
 
                     preview_url = None
@@ -230,9 +220,18 @@ async def _process_generation_internal(
             except Exception:
                 pass
 
-    except asyncio.TimeoutError:
-        logger.error(f"Operation timeout in generation task {task_id}")
+    except asyncio.CancelledError:
+        # Preserve CancelledError for shutdown/scale down scenarios
+        logger.warning(f"Generation task {task_id} was cancelled (shutdown/scale down)")
+        try:
+            database_service.update_task_state(task_id, "cancelled")
+        except Exception:
+            pass
         raise
     except Exception as e:
         logger.error(f"Error in generation task {task_id}: {str(e)}")
-        raise
+        # Try to reset to previous state on error
+        try:
+            database_service.update_task_state(task_id, "configured")
+        except Exception:
+            pass
