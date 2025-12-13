@@ -31,19 +31,19 @@ async def generate_image(request: GenerateRequest, background_tasks: BackgroundT
         try:
             task = database_service.get_task(request.task_id)
         except Exception as e:
-            logger.error(f"Task not found: {request.task_id}")
+            logger.error(f"Task not found: {request.task_id}, error: {str(e)}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Task not found: {str(e)}",
+                detail="Task not found",
             )
 
         try:
             database_service.update_task_state(request.task_id, "processing")
         except Exception as e:
-            logger.error(f"Failed to update task state to processing: {str(e)}")
+            logger.error(f"Failed to update task state to processing: {str(e)}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to update task state: {str(e)}",
+                detail="Failed to update task state",
             )
 
         background_tasks.add_task(
@@ -58,10 +58,10 @@ async def generate_image(request: GenerateRequest, background_tasks: BackgroundT
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error in generate endpoint: {str(e)}")
+        logger.error(f"Unexpected error in generate endpoint: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}",
+            detail="Internal server error",
         )
 
 
@@ -89,10 +89,10 @@ async def upscale_task(task_id: int, background_tasks: BackgroundTasks):
         try:
             database_service.update_task_state(task_id, "upscaling")
         except Exception as e:
-            logger.error(f"Failed to update task state to upscaling: {str(e)}")
+            logger.error(f"Failed to update task state to upscaling: {str(e)}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to update task state: {str(e)}",
+                detail="Failed to update task state",
             )
 
         background_tasks.add_task(process_upscale_background, task_id=task_id)
@@ -101,9 +101,9 @@ async def upscale_task(task_id: int, background_tasks: BackgroundTasks):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error in upscale endpoint: {str(e)}")
+        logger.error(f"Unexpected error in upscale endpoint: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}",
+            detail="Internal server error",
         )
 

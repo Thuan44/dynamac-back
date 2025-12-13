@@ -84,15 +84,15 @@ async def get_task_status(task_id: int):
     except Exception as e:
         error_msg = str(e)
         if "not found" in error_msg.lower():
-            logger.error(f"Task not found: {task_id}")
+            logger.error(f"Task not found: {task_id}, error: {error_msg}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Task not found: {task_id}"
+                detail="Task not found"
             )
         else:
-            logger.error(f"Failed to get task status {task_id}: {error_msg}")
+            logger.error(f"Failed to get task status {task_id}: {error_msg}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to get task status: {error_msg}"
+                detail="Failed to get task status"
             )
 
