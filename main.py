@@ -1,6 +1,9 @@
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from utils.rate_limiter import limiter
 from routes.upload import router as upload_router
 from routes.config import router as config_router
 from routes.generate import router as generate_router
@@ -21,6 +24,12 @@ app = FastAPI(
     description="Backend API for dynamic macOS wallpaper generation",
     version="1.0.0"
 )
+
+# Attach limiter to app state
+app.state.limiter = limiter
+
+# Add rate limit exception handler
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Configure CORS
 app.add_middleware(

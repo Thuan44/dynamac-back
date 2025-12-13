@@ -1,6 +1,7 @@
 import logging
 import uuid
-from fastapi import APIRouter, UploadFile, File, HTTPException, status
+from fastapi import APIRouter, UploadFile, File, HTTPException, status, Request
+from utils.rate_limiter import limiter
 from services.storage import storage_service
 from services.database import database_service
 from models.task import TaskCreate, UploadResponse
@@ -12,7 +13,8 @@ router = APIRouter(prefix="/api", tags=["upload"])
 
 
 @router.post("/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
-async def upload_image(file: UploadFile = File(...)):
+@limiter.limit("3/10 minutes")
+async def upload_image(request: Request, file: UploadFile = File(...)):
     """
     Upload an image file to Supabase Storage and create a task record.
     
