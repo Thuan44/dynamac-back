@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     timeout_gemini_api: float = 120.0  # Gemini API call timeout (2 minutes)
     timeout_image_processing: float = 60.0  # Image processing operations timeout (1 minute)
     timeout_storage_operation: float = 60.0  # Storage upload/download timeout (1 minute)
-    timeout_heic_creation: float = 180.0  # HEIC file creation timeout (3 minutes)
+    timeout_heic_creation: float = 240.0  # HEIC file creation timeout (4 minutes)
     timeout_background_task: float = 600.0  # Global timeout for background tasks (10 minutes)
     
     @field_validator("supabase_url")
