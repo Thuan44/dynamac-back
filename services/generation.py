@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from io import BytesIO
@@ -29,7 +30,35 @@ async def process_generation_background(
     - Generate or reuse variants based on configuration
     - Upload previews
     - Update task state and previews
+    
+    This function has a global timeout to prevent indefinite blocking.
     """
+    try:
+        # Wrap the entire task with a global timeout
+        await asyncio.wait_for(
+            _process_generation_internal(task_id, variants, source_image_url),
+            timeout=settings.timeout_background_task
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"Background generation task {task_id} exceeded global timeout of {settings.timeout_background_task}s")
+        try:
+            database_service.update_task_state(task_id, "configured")
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"Unexpected error in background generation for task {task_id}: {str(e)}")
+        try:
+            database_service.update_task_state(task_id, "configured")
+        except Exception:
+            pass
+
+
+async def _process_generation_internal(
+    task_id: int,
+    variants: List[VariantRequest],
+    source_image_url: str,
+) -> None:
+    """Internal function that performs the actual generation work."""
     try:
         task_data = database_service.get_task_raw(task_id)
         config = task_data.get("config", {})
@@ -47,13 +76,16 @@ async def process_generation_background(
                 pass
             return
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=settings.timeout_http_request) as client:
             try:
-                # Download with size limit
-                response = await client.get(
-                    source_image_url,
-                    follow_redirects=True,
-                    timeout=httpx.Timeout(30.0, connect=10.0)
+                # Download with size limit and configured timeouts
+                response = await asyncio.wait_for(
+                    client.get(
+                        source_image_url,
+                        follow_redirects=True,
+                        timeout=httpx.Timeout(settings.timeout_http_request, connect=settings.timeout_http_connect)
+                    ),
+                    timeout=settings.timeout_http_request
                 )
                 response.raise_for_status()
                 
@@ -95,27 +127,36 @@ async def process_generation_background(
 
                 if variant_source == "original":
                     if variant.format == "thumbnail":
-                        image = Image.open(BytesIO(image_bytes))
-                        if image.mode == "RGBA":
-                            rgb_image = Image.new("RGB", image.size, (255, 255, 255))
-                            rgb_image.paste(image, mask=image.split()[3] if len(image.split()) == 4 else None)
-                            image = rgb_image
-                        elif image.mode != "RGB":
-                            image = image.convert("RGB")
-
-                        image = image.resize((512, 288), Image.Resampling.LANCZOS)
-
-                        img_buffer = BytesIO()
-                        image.save(img_buffer, format="PNG")
-                        thumbnail_bytes = img_buffer.getvalue()
+                        # Process image with timeout
+                        def process_thumbnail():
+                            image = Image.open(BytesIO(image_bytes))
+                            if image.mode == "RGBA":
+                                rgb_image = Image.new("RGB", image.size, (255, 255, 255))
+                                rgb_image.paste(image, mask=image.split()[3] if len(image.split()) == 4 else None)
+                                image = rgb_image
+                            elif image.mode != "RGB":
+                                image = image.convert("RGB")
+                            image = image.resize((512, 288), Image.Resampling.LANCZOS)
+                            img_buffer = BytesIO()
+                            image.save(img_buffer, format="PNG")
+                            return img_buffer.getvalue()
+                        
+                        thumbnail_bytes = await asyncio.wait_for(
+                            asyncio.to_thread(process_thumbnail),
+                            timeout=settings.timeout_image_processing
+                        )
 
                         hour_filename = variant.hour.replace(":", "")
                         preview_name = f"preview_{hour_filename}_{uuid.uuid4().hex[:8]}.png"
-                        preview_url = storage_service.upload_to_bucket(
-                            file_content=thumbnail_bytes,
-                            file_name=preview_name,
-                            content_type="image/png",
-                            bucket="previews",
+                        preview_url = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                storage_service.upload_to_bucket,
+                                file_content=thumbnail_bytes,
+                                file_name=preview_name,
+                                content_type="image/png",
+                                bucket="previews",
+                            ),
+                            timeout=settings.timeout_storage_operation
                         )
                     else:
                         # Reuse source URL (already validated above)
@@ -124,10 +165,15 @@ async def process_generation_background(
                     preview_urls.append({"hour": variant.hour, "url": preview_url})
                     logger.info(f"Using original image for variant hour {variant.hour}")
                 else:
-                    generated_image_bytes, auto_uploaded_url = generate_variant(
-                        source=image_bytes,
-                        hour=variant.hour,
-                        format_type=variant.format,
+                    # Generate variant with timeout
+                    generated_image_bytes, auto_uploaded_url = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            generate_variant,
+                            source=image_bytes,
+                            hour=variant.hour,
+                            format_type=variant.format,
+                        ),
+                        timeout=settings.timeout_gemini_api
                     )
 
                     preview_url = None
@@ -143,11 +189,15 @@ async def process_generation_background(
                     if not preview_url:
                         hour_filename = variant.hour.replace(":", "")
                         preview_name = f"preview_{hour_filename}_{uuid.uuid4().hex[:8]}.png"
-                        preview_url = storage_service.upload_to_bucket(
-                            file_content=generated_image_bytes,
-                            file_name=preview_name,
-                            content_type="image/png",
-                            bucket="previews",
+                        preview_url = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                storage_service.upload_to_bucket,
+                                file_content=generated_image_bytes,
+                                file_name=preview_name,
+                                content_type="image/png",
+                                bucket="previews",
+                            ),
+                            timeout=settings.timeout_storage_operation
                         )
 
                     preview_urls.append({"hour": variant.hour, "url": preview_url})
@@ -180,9 +230,9 @@ async def process_generation_background(
             except Exception:
                 pass
 
+    except asyncio.TimeoutError:
+        logger.error(f"Operation timeout in generation task {task_id}")
+        raise
     except Exception as e:
-        logger.error(f"Unexpected error in background generation for task {task_id}: {str(e)}")
-        try:
-            database_service.update_task_state(task_id, "configured")
-        except Exception:
-            pass
+        logger.error(f"Error in generation task {task_id}: {str(e)}")
+        raise

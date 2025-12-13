@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from io import BytesIO
@@ -25,7 +26,31 @@ async def process_upscale_background(task_id: int) -> None:
     - Download the original source image once (for original variants)
     - For AI variants: download thumbnail and upscale it to 16:9 format
     - Upload to 'upscaled' bucket and store urls_renders
+    
+    This function has a global timeout to prevent indefinite blocking.
     """
+    try:
+        # Wrap the entire task with a global timeout
+        await asyncio.wait_for(
+            _process_upscale_internal(task_id),
+            timeout=settings.timeout_background_task
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"Background upscale task {task_id} exceeded global timeout of {settings.timeout_background_task}s")
+        try:
+            database_service.update_task_state(task_id, "previews_ready")
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"Unexpected error in background upscale for task {task_id}: {str(e)}")
+        try:
+            database_service.update_task_state(task_id, "previews_ready")
+        except Exception:
+            pass
+
+
+async def _process_upscale_internal(task_id: int) -> None:
+    """Internal function that performs the actual upscale work."""
     try:
         task_data = database_service.get_task_raw(task_id)
         urls_previews = task_data.get("urls_previews", {})
@@ -57,13 +82,16 @@ async def process_upscale_background(task_id: int) -> None:
         errors = []
         images_for_heic = []
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=settings.timeout_http_request) as client:
             try:
-                # Download with size limit
-                source_response = await client.get(
-                    source_url,
-                    follow_redirects=True,
-                    timeout=httpx.Timeout(30.0, connect=10.0)
+                # Download with size limit and configured timeouts
+                source_response = await asyncio.wait_for(
+                    client.get(
+                        source_url,
+                        follow_redirects=True,
+                        timeout=httpx.Timeout(settings.timeout_http_request, connect=settings.timeout_http_connect)
+                    ),
+                    timeout=settings.timeout_http_request
                 )
                 source_response.raise_for_status()
                 
@@ -90,19 +118,24 @@ async def process_upscale_background(task_id: int) -> None:
                 database_service.update_task_state(task_id, "previews_ready")
                 return
 
-            original_image = Image.open(BytesIO(source_bytes))
-            if original_image.mode == "RGBA":
-                rgb_image = Image.new("RGB", original_image.size, (255, 255, 255))
-                rgb_image.paste(original_image, mask=original_image.split()[3] if len(original_image.split()) == 4 else None)
-                original_image = rgb_image
-            elif original_image.mode != "RGB":
-                original_image = original_image.convert("RGB")
-
-            original_image = original_image.resize((2560, 1440), Image.Resampling.LANCZOS)
-
-            original_buffer = BytesIO()
-            original_image.save(original_buffer, format="PNG")
-            original_resized_bytes = original_buffer.getvalue()
+            # Process original image with timeout
+            def process_original_image():
+                original_image = Image.open(BytesIO(source_bytes))
+                if original_image.mode == "RGBA":
+                    rgb_image = Image.new("RGB", original_image.size, (255, 255, 255))
+                    rgb_image.paste(original_image, mask=original_image.split()[3] if len(original_image.split()) == 4 else None)
+                    original_image = rgb_image
+                elif original_image.mode != "RGB":
+                    original_image = original_image.convert("RGB")
+                original_image = original_image.resize((2560, 1440), Image.Resampling.LANCZOS)
+                original_buffer = BytesIO()
+                original_image.save(original_buffer, format="PNG")
+                return original_buffer.getvalue()
+            
+            original_resized_bytes = await asyncio.wait_for(
+                asyncio.to_thread(process_original_image),
+                timeout=settings.timeout_image_processing
+            )
 
             has_original_variant = any(
                 config_by_hour.get(variant.get("hour"), "ai") == "original"
@@ -126,11 +159,15 @@ async def process_upscale_background(task_id: int) -> None:
                     if variant_source == "original":
                         render_bytes = original_resized_bytes
                         render_name = f"render_{hour.replace(':', '')}_{uuid.uuid4().hex[:8]}.png"
-                        render_url = storage_service.upload_to_bucket(
-                            file_content=render_bytes,
-                            file_name=render_name,
-                            content_type="image/png",
-                            bucket="upscaled",
+                        render_url = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                storage_service.upload_to_bucket,
+                                file_content=render_bytes,
+                                file_name=render_name,
+                                content_type="image/png",
+                                bucket="upscaled",
+                            ),
+                            timeout=settings.timeout_storage_operation
                         )
 
                         renders.append({"hour": hour, "url": render_url})
@@ -152,11 +189,14 @@ async def process_upscale_background(task_id: int) -> None:
                             continue
 
                         try:
-                            # Download with size limit
-                            preview_response = await client.get(
-                                preview_url,
-                                follow_redirects=True,
-                                timeout=httpx.Timeout(30.0, connect=10.0)
+                            # Download with size limit and configured timeouts
+                            preview_response = await asyncio.wait_for(
+                                client.get(
+                                    preview_url,
+                                    follow_redirects=True,
+                                    timeout=httpx.Timeout(settings.timeout_http_request, connect=settings.timeout_http_connect)
+                                ),
+                                timeout=settings.timeout_http_request
                             )
                             preview_response.raise_for_status()
                             
@@ -183,13 +223,25 @@ async def process_upscale_background(task_id: int) -> None:
                             errors.append(error_msg)
                             continue
 
-                        render_bytes = upscale_image(source=thumbnail_bytes, format_type="16:9")
+                        # Upscale image with timeout
+                        render_bytes = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                upscale_image,
+                                source=thumbnail_bytes,
+                                format_type="16:9"
+                            ),
+                            timeout=settings.timeout_gemini_api
+                        )
                         render_name = f"render_{hour.replace(':', '')}_{uuid.uuid4().hex[:8]}.png"
-                        render_url = storage_service.upload_to_bucket(
-                            file_content=render_bytes,
-                            file_name=render_name,
-                            content_type="image/png",
-                            bucket="upscaled",
+                        render_url = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                storage_service.upload_to_bucket,
+                                file_content=render_bytes,
+                                file_name=render_name,
+                                content_type="image/png",
+                                bucket="upscaled",
+                            ),
+                            timeout=settings.timeout_storage_operation
                         )
 
                         renders.append({"hour": hour, "url": render_url})
@@ -211,16 +263,24 @@ async def process_upscale_background(task_id: int) -> None:
         try:
             if len(images_for_heic) > 0:
                 logger.info(f"Creating HEIC file with {len(images_for_heic)} images for task {task_id}")
-                heic_bytes = create_heic_with_multiple_images(images_for_heic)
+                # Create HEIC with timeout
+                heic_bytes = await asyncio.wait_for(
+                    asyncio.to_thread(create_heic_with_multiple_images, images_for_heic),
+                    timeout=settings.timeout_heic_creation
+                )
                 logger.info(f"HEIC file created successfully, size: {len(heic_bytes)} bytes")
 
                 heic_name = f"dynamic_{task_id}_{uuid.uuid4().hex[:8]}.heic"
                 logger.info(f"Uploading HEIC file to dynamics bucket: {heic_name}")
-                heic_url = storage_service.upload_to_bucket(
-                    file_content=heic_bytes,
-                    file_name=heic_name,
-                    content_type="image/heic",
-                    bucket="dynamics",
+                heic_url = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        storage_service.upload_to_bucket,
+                        file_content=heic_bytes,
+                        file_name=heic_name,
+                        content_type="image/heic",
+                        bucket="dynamics",
+                    ),
+                    timeout=settings.timeout_storage_operation
                 )
                 logger.info(f"Successfully created and uploaded HEIC file with {len(images_for_heic)} images to dynamics bucket: {heic_url}")
                 heic_created = True
@@ -253,9 +313,9 @@ async def process_upscale_background(task_id: int) -> None:
                 database_service.update_task_state(task_id, "previews_ready")
             except Exception:
                 pass
+    except asyncio.TimeoutError:
+        logger.error(f"Operation timeout in upscale task {task_id}")
+        raise
     except Exception as e:
-        logger.error(f"Unexpected error in background upscale for task {task_id}: {str(e)}")
-        try:
-            database_service.update_task_state(task_id, "previews_ready")
-        except Exception:
-            pass
+        logger.error(f"Error in upscale task {task_id}: {str(e)}")
+        raise

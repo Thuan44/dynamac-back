@@ -33,6 +33,15 @@ class Settings(BaseSettings):
     max_json_payload_size: int = 10 * 1024 * 1024  # 10MB max JSON payload size
     max_variants_count: int = 3  # Maximum number of variants (configurable via MAX_VARIANTS_COUNT env var)
     
+    # Timeout configurations (in seconds)
+    timeout_http_request: float = 30.0  # HTTP request timeout
+    timeout_http_connect: float = 10.0  # HTTP connection timeout
+    timeout_gemini_api: float = 120.0  # Gemini API call timeout (2 minutes)
+    timeout_image_processing: float = 60.0  # Image processing operations timeout (1 minute)
+    timeout_storage_operation: float = 60.0  # Storage upload/download timeout (1 minute)
+    timeout_heic_creation: float = 120.0  # HEIC file creation timeout (2 minutes)
+    timeout_background_task: float = 600.0  # Global timeout for background tasks (10 minutes)
+    
     @field_validator("supabase_url")
     @classmethod
     def validate_supabase_url(cls, v: str) -> str:
