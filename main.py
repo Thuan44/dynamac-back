@@ -5,10 +5,12 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from utils.rate_limiter import limiter
 from utils.payload_validation import PayloadSizeLimitMiddleware
+from utils.csrf_middleware import CSRFProtectionMiddleware
 from routes.upload import router as upload_router
 from routes.config import router as config_router
 from routes.generate import router as generate_router
 from routes.status import router as status_router
+from routes.csrf import router as csrf_router
 import os
 
 # Configure logging
@@ -32,6 +34,19 @@ app.state.limiter = limiter
 # Add rate limit exception handler
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# Determine allowed origins for CSRF protection
+allowed_origins = (
+    ["https://dynamac.zite.so"] if os.getenv("ENV") == "production" else ["*"]
+)
+
+# Add CSRF protection middleware (before CORS)
+# In production, require CSRF tokens. In development, use origin + X-Requested-With
+app.add_middleware(
+    CSRFProtectionMiddleware,
+    allowed_origins=allowed_origins,
+    require_token=(os.getenv("ENV") == "production")
+)
+
 # Add payload size limit middleware
 app.add_middleware(PayloadSizeLimitMiddleware)
 
@@ -41,10 +56,11 @@ app.add_middleware(
     allow_origins=["https://dynamac.zite.so" if os.getenv("ENV") == "production" else "*"],
     allow_credentials=True,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-CSRF-Token", "X-Requested-With"],
 )
 
 # Include routers
+app.include_router(csrf_router)  # CSRF token endpoint (must be before other routers)
 app.include_router(upload_router)
 app.include_router(config_router)
 app.include_router(generate_router)
