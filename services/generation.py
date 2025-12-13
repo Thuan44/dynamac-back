@@ -10,6 +10,8 @@ from gemini_pipeline import generate_variant
 from schemas.generate import VariantRequest
 from services.database import database_service
 from services.storage import storage_service
+from utils.url_validation import validate_supabase_storage_url
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,13 +36,50 @@ async def process_generation_background(
         config_variants = config.get("variants", [])
         config_by_hour = {v.get("hour"): v.get("source", "ai") for v in config_variants}
 
+        # Validate source image URL before downloading
+        try:
+            validate_supabase_storage_url(source_image_url)
+        except Exception as e:
+            logger.error(f"Invalid source image URL for task {task_id}: {str(e)}")
+            try:
+                database_service.update_task_state(task_id, "configured")
+            except Exception:
+                pass
+            return
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
-                response = await client.get(source_image_url)
+                # Download with size limit
+                response = await client.get(
+                    source_image_url,
+                    follow_redirects=True,
+                    timeout=httpx.Timeout(30.0, connect=10.0)
+                )
                 response.raise_for_status()
+                
+                # Check content length if available
+                content_length = response.headers.get("content-length")
+                if content_length:
+                    size = int(content_length)
+                    if size > settings.max_download_size:
+                        logger.error(f"Download size {size} exceeds maximum {settings.max_download_size}")
+                        raise ValueError(f"File size exceeds maximum allowed size")
+                
+                # Read content with size limit
                 image_bytes = response.content
+                if len(image_bytes) > settings.max_download_size:
+                    logger.error(f"Downloaded content size {len(image_bytes)} exceeds maximum {settings.max_download_size}")
+                    raise ValueError(f"File size exceeds maximum allowed size")
+                    
             except httpx.HTTPError as e:
                 logger.error(f"Failed to download image from {source_image_url}: {str(e)}")
+                try:
+                    database_service.update_task_state(task_id, "configured")
+                except Exception:
+                    pass
+                return
+            except ValueError as e:
+                logger.error(f"File size validation failed: {str(e)}")
                 try:
                     database_service.update_task_state(task_id, "configured")
                 except Exception:
@@ -79,6 +118,7 @@ async def process_generation_background(
                             bucket="previews",
                         )
                     else:
+                        # Reuse source URL (already validated above)
                         preview_url = source_image_url
 
                     preview_urls.append({"hour": variant.hour, "url": preview_url})
@@ -90,9 +130,17 @@ async def process_generation_background(
                         format_type=variant.format,
                     )
 
+                    preview_url = None
                     if auto_uploaded_url:
-                        preview_url = auto_uploaded_url
-                    else:
+                        # Validate auto-uploaded URL from Gemini pipeline
+                        try:
+                            validate_supabase_storage_url(auto_uploaded_url)
+                            preview_url = auto_uploaded_url
+                        except Exception as e:
+                            logger.warning(f"Auto-uploaded URL validation failed, uploading manually: {str(e)}")
+                            # Fall through to manual upload
+                    
+                    if not preview_url:
                         hour_filename = variant.hour.replace(":", "")
                         preview_name = f"preview_{hour_filename}_{uuid.uuid4().hex[:8]}.png"
                         preview_url = storage_service.upload_to_bucket(

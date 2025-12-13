@@ -10,6 +10,8 @@ from gemini_pipeline import upscale_image
 from services.database import database_service
 from services.heic_builder import create_heic_with_multiple_images
 from services.storage import storage_service
+from utils.url_validation import validate_supabase_storage_url
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -43,17 +45,48 @@ async def process_upscale_background(task_id: int) -> None:
         config_variants = config.get("variants", [])
         config_by_hour = {v.get("hour"): v.get("source", "ai") for v in config_variants}
 
+        # Validate source URL before downloading
+        try:
+            validate_supabase_storage_url(source_url)
+        except Exception as e:
+            logger.error(f"Invalid source URL for task {task_id}: {str(e)}")
+            database_service.update_task_state(task_id, "previews_ready")
+            return
+
         renders = []
         errors = []
         images_for_heic = []
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
-                source_response = await client.get(source_url)
+                # Download with size limit
+                source_response = await client.get(
+                    source_url,
+                    follow_redirects=True,
+                    timeout=httpx.Timeout(30.0, connect=10.0)
+                )
                 source_response.raise_for_status()
+                
+                # Check content length if available
+                content_length = source_response.headers.get("content-length")
+                if content_length:
+                    size = int(content_length)
+                    if size > settings.max_download_size:
+                        logger.error(f"Download size {size} exceeds maximum {settings.max_download_size}")
+                        raise ValueError(f"File size exceeds maximum allowed size")
+                
+                # Read content with size limit
                 source_bytes = source_response.content
+                if len(source_bytes) > settings.max_download_size:
+                    logger.error(f"Downloaded content size {len(source_bytes)} exceeds maximum {settings.max_download_size}")
+                    raise ValueError(f"File size exceeds maximum allowed size")
+                    
             except httpx.HTTPError as e:
                 logger.error(f"Failed to download source image {source_url}: {str(e)}")
+                database_service.update_task_state(task_id, "previews_ready")
+                return
+            except ValueError as e:
+                logger.error(f"File size validation failed: {str(e)}")
                 database_service.update_task_state(task_id, "previews_ready")
                 return
 
@@ -109,12 +142,43 @@ async def process_upscale_background(task_id: int) -> None:
                             errors.append(f"Missing preview URL for variant hour {hour}")
                             continue
 
+                        # Validate preview URL before downloading
                         try:
-                            preview_response = await client.get(preview_url)
+                            validate_supabase_storage_url(preview_url)
+                        except Exception as e:
+                            error_msg = f"Invalid preview URL for variant hour {hour}: {str(e)}"
+                            logger.error(error_msg)
+                            errors.append(error_msg)
+                            continue
+
+                        try:
+                            # Download with size limit
+                            preview_response = await client.get(
+                                preview_url,
+                                follow_redirects=True,
+                                timeout=httpx.Timeout(30.0, connect=10.0)
+                            )
                             preview_response.raise_for_status()
+                            
+                            # Check content length if available
+                            content_length = preview_response.headers.get("content-length")
+                            if content_length:
+                                size = int(content_length)
+                                if size > settings.max_download_size:
+                                    raise ValueError(f"File size exceeds maximum allowed size")
+                            
+                            # Read content with size limit
                             thumbnail_bytes = preview_response.content
+                            if len(thumbnail_bytes) > settings.max_download_size:
+                                raise ValueError(f"File size exceeds maximum allowed size")
+                                
                         except httpx.HTTPError as e:
                             error_msg = f"Failed to download thumbnail from {preview_url} for hour {hour}: {str(e)}"
+                            logger.error(error_msg)
+                            errors.append(error_msg)
+                            continue
+                        except ValueError as e:
+                            error_msg = f"File size validation failed for preview {preview_url} hour {hour}: {str(e)}"
                             logger.error(error_msg)
                             errors.append(error_msg)
                             continue
