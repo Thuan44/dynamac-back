@@ -285,7 +285,7 @@ class DatabaseService:
     
     def update_task_processing_started(self, task_id: int) -> datetime:
         """
-        Mark task as processing and store started_at timestamp.
+        Mark task as processing and store started_at timestamp in config.
         
         Args:
             task_id: ID of the task to update
@@ -295,11 +295,19 @@ class DatabaseService:
         """
         try:
             started_at = datetime.utcnow()
+            
+            # Get current config to preserve existing data
+            task_data = self.get_task_raw(task_id)
+            current_config = task_data.get("config", {})
+            
+            # Update config with started_at timestamp
+            current_config["processing_started_at"] = started_at.isoformat()
+            
             response = (
                 self.client.table("tasks")
                 .update({
                     "state": "processing",
-                    "started_at": started_at.isoformat()
+                    "config": current_config
                 })
                 .eq("id", task_id)
                 .execute()
@@ -316,7 +324,7 @@ class DatabaseService:
     
     def get_task_started_at(self, task_id: int) -> Optional[datetime]:
         """
-        Get the started_at timestamp for a task.
+        Get the started_at timestamp for a task from config.
         
         Args:
             task_id: ID of the task to retrieve
@@ -326,7 +334,8 @@ class DatabaseService:
         """
         try:
             task_data = self.get_task_raw(task_id)
-            started_at = task_data.get("started_at")
+            config = task_data.get("config", {})
+            started_at = config.get("processing_started_at")
             if started_at:
                 return parse_datetime(started_at)
             return None
