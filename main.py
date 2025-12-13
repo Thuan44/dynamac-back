@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from utils.rate_limiter import limiter
+from utils.payload_validation import PayloadSizeLimitMiddleware
 from routes.upload import router as upload_router
 from routes.config import router as config_router
 from routes.generate import router as generate_router
@@ -30,6 +31,9 @@ app.state.limiter = limiter
 
 # Add rate limit exception handler
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Add payload size limit middleware
+app.add_middleware(PayloadSizeLimitMiddleware)
 
 # Configure CORS
 app.add_middleware(

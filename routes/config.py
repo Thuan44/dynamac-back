@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from services.database import database_service
+from config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -36,10 +37,17 @@ class TaskConfigPayload(BaseModel):
 
     @field_validator("variants")
     @classmethod
-    def validate_variants_not_empty(cls, value: List[VariantConfig]) -> List[VariantConfig]:
-        """Ensure that variants list is not empty."""
+    def validate_variants(cls, value: List[VariantConfig]) -> List[VariantConfig]:
+        """Validate that variants list is not empty and does not exceed maximum allowed size."""
         if not value:
             raise ValueError("variants must be a non-empty array")
+        
+        if len(value) > settings.max_variants_count:
+            raise ValueError(
+                f"Maximum {settings.max_variants_count} variants allowed "
+                f"(received {len(value)})"
+            )
+        
         return value
 
 

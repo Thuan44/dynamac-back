@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     allowed_url_domains: list[str] = []  # Empty list means auto-detect from SUPABASE_URL
     max_download_size: int = 50 * 1024 * 1024  # 50MB max download size
     
+    # JSON payload limits
+    max_json_payload_size: int = 10 * 1024 * 1024  # 10MB max JSON payload size
+    max_variants_count: int = 3  # Maximum number of variants (configurable via MAX_VARIANTS_COUNT env var)
+    
     class Config:
         env_file = ".env"
         case_sensitive = False
