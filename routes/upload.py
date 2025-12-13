@@ -4,7 +4,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, status
 from services.storage import storage_service
 from services.database import database_service
 from models.task import TaskCreate, UploadResponse
-from config import settings
+from utils.file_validation import validate_uploaded_file
 
 logger = logging.getLogger(__name__)
 
@@ -29,32 +29,24 @@ async def upload_image(file: UploadFile = File(...)):
     task_id = None
     
     try:
-        # Validate file type
-        if file.content_type not in settings.allowed_image_types:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid file type. Allowed types: {', '.join(settings.allowed_image_types)}"
-            )
-        
         # Read file content
         file_content = await file.read()
         
-        # Validate file size
-        if len(file_content) > settings.max_file_size:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File size exceeds maximum allowed size of {settings.max_file_size / (1024 * 1024)}MB"
-            )
+        # Validate file (size, magic bytes, image integrity)
+        # This validates the actual file content, not just the client-provided content-type
+        mime_type, file_extension = validate_uploaded_file(
+            file_content=file_content,
+            client_content_type=file.content_type
+        )
         
-        # Generate unique file name
-        file_extension = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+        # Generate unique file name using validated extension (ignore client-provided extension)
         file_name = f"{uuid.uuid4()}.{file_extension}"
         
-        # Upload to Supabase Storage
+        # Upload to Supabase Storage using validated MIME type
         public_url = storage_service.upload_file(
             file_content=file_content,
             file_name=file_name,
-            content_type=file.content_type
+            content_type=mime_type
         )
         
         # Create task in database
@@ -73,7 +65,8 @@ async def upload_image(file: UploadFile = File(...)):
         # Re-raise HTTP exceptions
         raise
     except Exception as e:
-        logger.error(f"Upload failed: {str(e)}")
+        # Log detailed error for debugging (server-side only)
+        logger.error(f"Upload failed: {str(e)}", exc_info=True)
         
         # Rollback: delete file if it was uploaded
         if file_name:
@@ -89,8 +82,9 @@ async def upload_image(file: UploadFile = File(...)):
             except Exception as rollback_error:
                 logger.error(f"Rollback failed (task deletion): {str(rollback_error)}")
         
+        # Generalize error message for security (don't expose internal details)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to upload file: {str(e)}"
+            detail="Failed to upload file"
         )
 

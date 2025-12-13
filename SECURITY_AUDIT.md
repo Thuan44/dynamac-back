@@ -1,6 +1,6 @@
 # Audit de Sécurité - Dynamac Backend
 
-**Date de l'audit:** 2024  
+**Date de l'audit:** Décembre 2025  
 **Version de l'application:** 1.0.0  
 **Auditeur:** Audit de sécurité automatisé
 
