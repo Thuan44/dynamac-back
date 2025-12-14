@@ -258,7 +258,7 @@ async def _process_upscale_internal(task_id: int) -> None:
                 # Create HEIC (CPU-bound, no asyncio timeout)
                 # Measure actual duration for business timeout logic
                 heic_start_time = time.time()
-                heic_bytes = create_heic_with_multiple_images(images_for_heic)
+                heic_bytes = await asyncio.to_thread(create_heic_with_multiple_images, images_for_heic)
                 heic_duration = time.time() - heic_start_time
                 logger.info(f"HEIC file created successfully in {heic_duration:.2f}s, size: {len(heic_bytes)} bytes")
                 
