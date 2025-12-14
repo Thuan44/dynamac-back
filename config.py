@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     
     # JSON payload limits
     max_json_payload_size: int = 10 * 1024 * 1024  # 10MB max JSON payload size
-    max_variants_count: int = 3  # Maximum number of variants (configurable via MAX_VARIANTS_COUNT env var)
+    max_variants_count: int = 4  # Maximum number of variants (configurable via MAX_VARIANTS_COUNT env var)
     
     # Timeout configurations (in seconds)
     timeout_http_request: float = 30.0  # HTTP request timeout
