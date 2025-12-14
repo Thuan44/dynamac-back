@@ -62,7 +62,9 @@ def create_heic_with_multiple_images(images_with_hours: List[Tuple[bytes, Option
         if xmp_data:
             save_args["xmp"] = xmp_data
 
+        logger.info(f"Saving HEIC file with {len(images_with_hours)} images")
         heif_file.save(heic_buffer, **save_args)
+        logger.info(f"HEIC file saved successfully")
         heic_buffer.seek(0)
         return heic_buffer.getvalue()
 
