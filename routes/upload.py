@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api", tags=["upload"])
 
 
 @router.post("/upload", response_model=UploadResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("3/10 minutes")
+@limiter.limit("10/10 minutes")
 async def upload_image(request: Request, file: UploadFile = File(...)):
     """
     Upload an image file to Supabase Storage and create a task record.
